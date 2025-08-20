@@ -6,6 +6,9 @@ from app.adapters.extract.pymupdf_text_extractor import PyMuPDFTextExtractor
 from app.application.use_cases.extract_text_from_pdf import (
     ExtractTextFromPdf, ExtractTextInput
 )
+from app.application.use_cases.extract_text_from_all_pdfs import (
+    ExtractAllPdfs, ExtractAllPdfsInput
+)
 
 def main():
     parser = argparse.ArgumentParser(description="Herramientas RAG")
@@ -20,6 +23,10 @@ def main():
     )
     ext.add_argument("--max-pages", type=int, default=None)
 
+    allp = sub.add_parser("extract-all", help="Extraer texto de todos los PDFs bajo company_files/")
+    allp.add_argument("--max-pages", type=int, default=None)
+    allp.add_argument("--non-recursive", action="store_true")
+
     args = parser.parse_args()
 
     if args.cmd == "extract":
@@ -32,6 +39,19 @@ def main():
         print(f"Páginas extraídas: {out.result.page_count}")
         for i, page in enumerate(out.result.pages, start=1):
             print(f"\n--- Página {i} ---\n{page[:1000]}")  # muestra primeras 1000 chars para inspección
+    elif args.cmd == "extract-all":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        uc = ExtractAllPdfs(blob, extractor)
+
+        out = uc.execute(ExtractAllPdfsInput(
+            max_pages=args.max_pages,
+            recursive=not args.non_recursive
+        ))
+        print(f"Procesados {len(out.results)} PDFs")
+        for r in out.results:
+            print(f"- {r.source_path} -> {r.result.page_count} páginas extraídas")
+
 
 if __name__ == "__main__":
     main()

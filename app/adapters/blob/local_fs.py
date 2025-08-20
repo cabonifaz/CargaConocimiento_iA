@@ -15,6 +15,7 @@ class LocalFileSystemBlob(BlobStoragePort):
     ) -> None:
         self.exclude_globs = exclude_globs or settings.EXCLUDE_GLOBS
         self.max_pdf_mb = max_pdf_mb or settings.MAX_PDF_MB
+        self.base_dir = settings.COMPANY_FILES_DIR
 
     def list_pdfs(self, base_dir: Path, recursive: bool = True) -> Iterable[FileInfo]:
         if not base_dir.exists() or not base_dir.is_dir():
