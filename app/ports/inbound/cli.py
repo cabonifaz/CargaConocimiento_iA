@@ -3,6 +3,8 @@ from pathlib import Path
 
 from app.adapters.blob.local_fs import LocalFileSystemBlob
 from app.adapters.extract.pymupdf_text_extractor import PyMuPDFTextExtractor
+from app.adapters.tokenizer.simple_regex_tokenizer import SimpleRegexTokenizer
+
 from app.application.use_cases.extract_text_from_pdf import (
     ExtractTextFromPdf, ExtractTextInput
 )
@@ -15,7 +17,11 @@ from app.application.use_cases.extract_and_normalize_pdf import (
 from app.application.use_cases.extract_and_normalize_all_pdfs import (
     ExtractAndNormalizeAllPdfs, ExtractAndNormalizeAllInput
 )
-from app.domain.services.text_normalizer import NormalizerConfig
+from app.application.use_cases.extract_normalize_chunk_pdf import (
+    ExtractNormalizeChunkPdf, ExtractNormalizeChunkInput
+)
+from app.domain.services.chunker import TokenChunker, ChunkerConfig
+from app.domain.services.text_normalizer import NormalizerConfig, TextNormalizer
 
 def main():
     parser = argparse.ArgumentParser(description="Herramientas RAG")
@@ -49,6 +55,14 @@ def main():
     normall.add_argument("--max-pages", type=int, default=None)
     normall.add_argument("--non-recursive", action="store_true")
     normall.add_argument("--join", action="store_true")
+
+    # Chunking
+    chunk = sub.add_parser("chunk", help="Extraer, normalizar y chunkear un PDF")
+    chunk.add_argument("relative_path", type=str)
+    chunk.add_argument("--max-pages", type=int, default=None)
+    chunk.add_argument("--target", type=int, default=512, help="tokens por chunk")
+    chunk.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
+    chunk.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens por chunk")
 
 
     args = parser.parse_args()
@@ -108,6 +122,24 @@ def main():
         print(f"Normalizados {len(out.results)} PDFs")
         for r in out.results:
             print(f"- {r.source_path} ({r.page_count} páginas)")
+    elif args.cmd == "chunk":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        chunker = TokenChunker(tokenizer, ChunkerConfig(
+            target_tokens=args.target,
+            overlap_tokens=args.overlap,
+            min_tokens=args.min_toks,
+        ))
+        normalizer = TextNormalizer()
+        uc = ExtractNormalizeChunkPdf(blob, extractor, normalizer, chunker)
+        out = uc.execute(ExtractNormalizeChunkInput(relative_path=Path(args.relative_path),
+                                                max_pages=args.max_pages))
+        print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
+        print(f"Chunks generados: {len(out.chunks)}")
+        for i, c in enumerate(out.chunks, start=1):
+            preview = c.text[:160].replace("\n", " ")
+            print(f"#{i:03d} page={c.page} toks={c.token_count} id={c.chunk_id[:12]}  {preview}...")
 
 
 if __name__ == "__main__":
