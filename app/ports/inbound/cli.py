@@ -12,6 +12,9 @@ from app.application.use_cases.extract_text_from_all_pdfs import (
 from app.application.use_cases.extract_and_normalize_pdf import (
     ExtractAndNormalizePdf, ExtractAndNormalizeInput
 )
+from app.application.use_cases.extract_and_normalize_all_pdfs import (
+    ExtractAndNormalizeAllPdfs, ExtractAndNormalizeAllInput
+)
 from app.domain.services.text_normalizer import NormalizerConfig
 
 def main():
@@ -38,9 +41,15 @@ def main():
     norm.add_argument("relative_path", type=str, help="ruta del PDF (ver ayuda extract)")
     norm.add_argument("--max-pages", type=int, default=None)
     norm.add_argument("--join", action="store_true", help="unir todas las páginas en un único texto")
-    # flags opcionales para ajustar heurísticas
     norm.add_argument("--no-fix-hyphens", action="store_true")
     norm.add_argument("--no-join-soft-breaks", action="store_true")
+
+    # Normalizar todos los PDFs
+    normall = sub.add_parser("normalize-all", help="Extraer y normalizar todos los PDFs")
+    normall.add_argument("--max-pages", type=int, default=None)
+    normall.add_argument("--non-recursive", action="store_true")
+    normall.add_argument("--join", action="store_true")
+
 
     args = parser.parse_args()
 
@@ -87,6 +96,18 @@ def main():
         else:
             for i, page in enumerate(out.normalized_pages or [], start=1):
                 print(f"\n--- Página {i} ---\n{page[:1000]}")
+    elif args.cmd == "normalize-all":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        uc = ExtractAndNormalizeAllPdfs(blob, extractor)
+        out = uc.execute(ExtractAndNormalizeAllInput(
+            max_pages=args.max_pages,
+            recursive=not args.non_recursive,
+            join_pages=args.join,
+        ))
+        print(f"Normalizados {len(out.results)} PDFs")
+        for r in out.results:
+            print(f"- {r.source_path} ({r.page_count} páginas)")
 
 
 if __name__ == "__main__":
