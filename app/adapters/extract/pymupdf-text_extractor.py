@@ -15,7 +15,7 @@ class PyMuPDFConfig:
 
 
 class PyMuPDFTextExtractor(TextExtractorPort):
-    """Extractor de texto usando PyMuPDF (fitz). Trabaja SOBRE BYTES."""
+    """Extractor de texto usando PyMuPDF. Trabaja SOBRE BYTES."""
 
     def __init__(self, config: Optional[PyMuPDFConfig] = None) -> None:
         self.cfg = config or PyMuPDFConfig()
