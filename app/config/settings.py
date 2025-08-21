@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     EXCLUDE_GLOBS: list[str] = ["**/~$*", "**/.DS_Store", "**/._*"]
 
     AWS_PROFILE: Optional[str] = None
-    BEDROCK_REGION: str = "us-east-1"
+    BEDROCK_REGION: str = "us-east-2"
     BEDROCK_MODEL_ID: str = "amazon.titan-embed-text-v2:0"
     BEDROCK_EMBED_DIM: Optional[int] = None
     BEDROCK_BATCH_SIZE: int = 64
