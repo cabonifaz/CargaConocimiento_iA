@@ -1,8 +1,10 @@
 import argparse
 from pathlib import Path
+from re import sub
 
 from app.adapters.blob.local_fs import LocalFileSystemBlob
 from app.adapters.extract.pymupdf_text_extractor import PyMuPDFTextExtractor
+from app.adapters.tokenizer.simple_regex_tokenizer import SimpleRegexTokenizer
 from app.adapters.tokenizer.simple_regex_tokenizer import SimpleRegexTokenizer
 
 from app.application.use_cases.extract_text_from_pdf import (
@@ -20,8 +22,19 @@ from app.application.use_cases.extract_and_normalize_all_pdfs import (
 from app.application.use_cases.extract_normalize_chunk_pdf import (
     ExtractNormalizeChunkPdf, ExtractNormalizeChunkInput
 )
+from app.application.use_cases.extract_normalize_chunk_global_pdf import (
+    ExtractNormalizeChunkGlobalPdf, ExtractNormalizeChunkGlobalInput
+)
+from app.application.use_cases.chunk_global_all import (
+    ChunkGlobalAll, ChunkGlobalAllInput
+)
+
 from app.domain.services.chunker import TokenChunker, ChunkerConfig
 from app.domain.services.text_normalizer import NormalizerConfig, TextNormalizer
+from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig
+from app.domain.services.chunk_quality import QualityConfig
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="Herramientas RAG")
@@ -63,6 +76,36 @@ def main():
     chunk.add_argument("--target", type=int, default=512, help="tokens por chunk")
     chunk.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
     chunk.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens por chunk")
+
+    # Chunking global
+    gchunk = sub.add_parser("chunk-global", help="Extraer, normalizar y chunkear GLOBAL un PDF")
+    gchunk.add_argument("relative_path", type=str)
+    gchunk.add_argument("--max-pages", type=int, default=None)
+    gchunk.add_argument("--target", type=int, default=512, help="tokens por chunk")
+    gchunk.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
+    gchunk.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
+    gchunk.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
+    
+    # Global all
+    # --- subcomando ---
+    gall = sub.add_parser("chunk-global-all", help="Chunking global + validación para TODOS los PDFs")
+    gall.add_argument("--max-pages", type=int, default=None)
+    gall.add_argument("--non-recursive", action="store_true")
+
+    # params de chunker
+    gall.add_argument("--target", type=int, default=512)
+    gall.add_argument("--overlap", type=int, default=64)
+    gall.add_argument("--min-toks", type=int, default=50)
+    gall.add_argument("--sep", type=str, default="\n\n\f\n\n")
+
+    # quality gates
+    gall.add_argument("--q-min-toks", type=int, default=50)
+    gall.add_argument("--q-min-chars", type=int, default=200)
+    gall.add_argument("--q-alpha-min", type=float, default=0.30)
+    gall.add_argument("--q-uniq-min", type=float, default=0.10)
+
+    gall.add_argument("--no-report", action="store_true", help="no generar archivo .jsonl")
+    gall.add_argument("--dry-run", action="store_true", help="solo validar, no embebe ni sube")
 
 
     args = parser.parse_args()
@@ -140,6 +183,68 @@ def main():
         for i, c in enumerate(out.chunks, start=1):
             preview = c.text[:160].replace("\n", " ")
             print(f"#{i:03d} page={c.page} toks={c.token_count} id={c.chunk_id[:12]}  {preview}...")
+    elif args.cmd == "chunk-global":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        chunker = GlobalTokenChunker(tokenizer, GlobalChunkerConfig(
+            target_tokens=args.target,
+            overlap_tokens=args.overlap,
+            min_tokens=args.min_toks,
+            page_separator=args.sep,
+        ))
+        normalizer = TextNormalizer()
+        uc = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
+        out = uc.execute(ExtractNormalizeChunkGlobalInput(
+            relative_path=Path(args.relative_path),
+            max_pages=args.max_pages,
+        ))
+        print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
+        print(f"Chunks generados: {len(out.chunks)}")
+        for i, c in enumerate(out.chunks, start=1):
+            preview = c.text[:160].replace("\n", " ")
+            print(f"#{i:03d} pages={c.page_start}-{c.page_end} toks={c.token_count} "
+                f"chars={c.char_start}-{c.char_end} id={c.chunk_id[:12]}  {preview}...")
+    elif args.cmd == "chunk-global-all":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        normalizer = TextNormalizer()
+        chunker = GlobalTokenChunker(tokenizer, GlobalChunkerConfig(
+            target_tokens=args.target,
+            overlap_tokens=args.overlap,
+            min_tokens=args.min_toks,
+            page_separator=args.sep,
+        ))
+
+        uc = ChunkGlobalAll(blob, extractor, normalizer, chunker)
+        out = uc.execute(ChunkGlobalAllInput(
+            max_pages=args.max_pages,
+            recursive=not args.non_recursive,
+            chunker_cfg=GlobalChunkerConfig(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+            quality_cfg=QualityConfig(
+                min_tokens=args.q_min_toks,
+                min_chars=args.q_min_chars,
+                min_alpha_ratio=args.q_alpha_min,
+                min_unique_ratio=args.q_uniq_min,
+            ),
+            dry_run=args.dry_run or True,          # por ahora siempre dry-run
+            report_jsonl=not args.no_report,
+        ))
+
+        print(f"Archivos procesados: {len(out.reports)}")
+        for r in out.reports[:10]:  # muestra los primeros 10
+            print(f"- {r.file_path.name}: pages={r.pages} total={r.chunks_total} ok={r.chunks_accepted} "
+                f"avgTok={r.avg_tokens:.1f} minTok={r.min_tokens} maxTok={r.max_tokens} "
+                f"warns={';'.join(r.warnings) or '—'}")
+        if out.report_path:
+            print(f"Reporte JSONL: {out.report_path}")
+
 
 
 if __name__ == "__main__":
