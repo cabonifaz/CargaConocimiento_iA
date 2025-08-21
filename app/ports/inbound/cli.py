@@ -95,6 +95,7 @@ def main():
     ew.add_argument("--q-alpha-min", type=float, default=0.30)
     ew.add_argument("--q-uniq-min", type=float, default=0.10)
     ew.add_argument("--doc-id", type=str, default=None)
+    ew.add_argument("--company-id", type=str, default="default_company", help="Company identifier")
 
     # --- bedrock-check (sanity de conexión) ---
     br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
@@ -261,11 +262,12 @@ def main():
                     min_unique_ratio=args.q_uniq_min,
                 ),
                 doc_id=args.doc_id,
+                company_id=getattr(args, 'company_id', 'default_company'),
             ))
 
             print(f"Archivo: {out.source_path}")
             print(f"Páginas: {out.page_count} | Chunks aceptados: {out.used_text_count}")
-            print(f"Weaviate upsert -> escritos: {out.written} | colección: {settings.WEAVIATE_COLLECTION} | doc_id: {out.doc_id}")
+            print(f"Weaviate upsert -> escritos: {out.written} | colección: {settings.WEAVIATE_COLLECTION} | doc_id: {out.doc_id} | company_id: {getattr(args, 'company_id', 'default_company')}")
         finally:
             store.close()
             

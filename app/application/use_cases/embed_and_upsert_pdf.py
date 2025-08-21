@@ -24,6 +24,7 @@ class EmbedAndUpsertPdfInput:
     chunker_cfg: Optional[GlobalChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
     doc_id: Optional[str] = None  # si no viene, se usará el nombre de archivo (stem)
+    company_id: str = "default_company"
 
 @dataclass
 class EmbedAndUpsertPdfOutput:
@@ -57,7 +58,7 @@ class EmbedAndUpsertPdf:
         # doc_id por defecto = nombre de archivo (sin extensión)
         doc_id = params.doc_id or Path(out.source_path).stem
 
-        written = self.vs.upsert_chunks(doc_id=doc_id, chunks=out.chunks, vectors=out.vectors)
+        written = self.vs.upsert_chunks(doc_id=doc_id, chunks=out.chunks, vectors=out.vectors, company_id=params.company_id)
 
         return EmbedAndUpsertPdfOutput(
             source_path=out.source_path,

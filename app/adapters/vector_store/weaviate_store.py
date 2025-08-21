@@ -43,7 +43,7 @@ class WeaviateVectorStore(VectorStorePort):
         except Exception:
             pass
 
-    def upsert_chunks(self, doc_id: str, chunks: List, vectors: List[list[float]]) -> int:
+    def upsert_chunks(self, doc_id: str, chunks: List, vectors: List[list[float]], company_id: str = "default_company") -> int:
         if len(chunks) != len(vectors):
             raise ValueError("chunks y vectors deben tener la misma longitud.")
         if not chunks:
@@ -65,6 +65,7 @@ class WeaviateVectorStore(VectorStorePort):
 
             for c, vec in zip(batch_chunks, batch_vecs):
                 props = {
+                    "company_id": company_id,
                     "doc_id": doc_id,
                     "chunk_id": c.chunk_id,   # tu hash/64hex queda como propiedad (no como uuid)
                     "text": c.text,
@@ -112,6 +113,7 @@ class WeaviateVectorStore(VectorStorePort):
                 vector_index_config=Configure.VectorIndex.hnsw(distance_metric=metric),
             ),
             properties=[
+                Property(name="company_id", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="doc_id", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="chunk_id", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="text", data_type=DataType.TEXT, index_searchable=True),
