@@ -130,3 +130,37 @@ python -m app.main chunk-global-all --q-alpha-min 0.25 --q-uniq-min 0.08
 # Sin reporte, solo consola
 python -m app.main chunk-global-all --no-report
 ```
+
+### 4) `embed-dry` — pipeline para **embeddings**
+
+Ejecuta **extracción → normalización → chunking global → embeddings** sobre un archivo.
+
+```bash
+python -m app.main embed-dry <ruta_o_nombre.pdf> \
+  [--max-pages N] \
+  [--target 512] [--overlap 64] [--min-toks 50] \
+  [--sep "\n\n\f\n\n"] \
+  [--q-min-toks 50] [--q-min-chars 200] [--q-alpha-min 0.30] [--q-uniq-min 0.10]
+```
+
+* `--target`: tokens por chunk (recomendado 512–768)
+* `--overlap`: tokens de solapamiento (≈10–15% del target)
+* `--min-toks`: umbral mínimo de tokens por chunk
+* `--sep`: separador entre páginas en el texto unido (no suele cambiarse)
+
+**Salida (consola):**
+
+* Páginas detectadas y total de chunks
+* Por cada chunk: `pages=start-end`, `toks`, `chars=start-end`, `chunk_id` y un preview del texto
+
+**Ejemplos**
+
+```bash
+# Procesar un PDF específico
+python -m app.main embed-dry 8a49ffa4..._original.pdf --max-pages 3
+
+# Ajustar parámetros de chunking
+python -m app.main embed-dry 8a49ffa4..._original.pdf --target 768 --overlap 128
+
+# Sin validaciones de calidad
+python -m app.main embed-dry 8a49ffa4..._original.pdf --q-min-toks 0 --q-min-chars 0
