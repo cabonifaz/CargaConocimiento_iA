@@ -1,12 +1,11 @@
-# src/app/adapters/vector_store/weaviate_store.py
-from __future__ import annotations
 from typing import List, Optional
+from uuid import uuid5, NAMESPACE_URL
 
 import weaviate
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 from weaviate.classes.config import Configure, Property, DataType
 from weaviate.classes.data import DataObject
-
+from weaviate.exceptions import WeaviateBaseError
 
 from app.ports.outbound.vector_store import VectorStorePort
 from app.config.settings import settings
@@ -62,10 +61,12 @@ class WeaviateVectorStore(VectorStorePort):
             batch_vecs = vectors[i:i+bs]
 
             objs: list[DataObject] = []
+            id_map: list[tuple[dict, list[float], str]] = []
+
             for c, vec in zip(batch_chunks, batch_vecs):
                 props = {
                     "doc_id": doc_id,
-                    "chunk_id": c.chunk_id,
+                    "chunk_id": c.chunk_id,   # tu hash/64hex queda como propiedad (no como uuid)
                     "text": c.text,
                     "page_start": c.page_start,
                     "page_end": c.page_end,
@@ -73,14 +74,24 @@ class WeaviateVectorStore(VectorStorePort):
                     "char_end": c.char_end,
                     "token_count": c.token_count,
                 }
-                objs.append(DataObject(
-                    properties=props,
-                    vector=vec,      # <- vector fuera de properties
-                    uuid=c.chunk_id  # <- id fuera de properties
-                ))
+                # UUID RFC-4122 determinístico a partir de doc_id + chunk_id
+                uid = str(uuid5(NAMESPACE_URL, f"{doc_id}:{c.chunk_id}"))
+                objs.append(DataObject(properties=props, vector=vec, uuid=uid))
+                id_map.append((props, vec, uid))
 
-            coll.data.insert_many(objs)
-            total += len(objs)
+            try:
+                # intento rápido en batch
+                coll.data.insert_many(objs)
+                total += len(objs)
+            except WeaviateBaseError:
+                # fallback: upsert por ítem (insert → replace si ya existe)
+                for props, vec, uid in id_map:
+                    try:
+                        coll.data.insert(properties=props, uuid=uid, vector=vec)
+                    except WeaviateBaseError:
+                        # si ya existe u otro conflicto, hacemos replace (sobrescribe todo)
+                        coll.data.replace(uuid=uid, properties=props, vector=vec)
+                    total += 1
 
         return total
 
