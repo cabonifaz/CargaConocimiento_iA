@@ -22,6 +22,9 @@ from app.application.use_cases.embed_chunks_from_pdf import (
 from app.application.use_cases.embed_and_upsert_pdf import (
     EmbedAndUpsertPdf, EmbedAndUpsertPdfInput
 )
+from app.application.use_cases.embed_and_upsert_company_pdfs import (
+    EmbedAndUpsertCompanyPdfs, EmbedAndUpsertCompanyPdfsInput
+)
 
 from app.domain.services.text_normalizer import TextNormalizer
 import app.domain.services.chunker_global as chunker_global
@@ -96,6 +99,19 @@ def main():
     ew.add_argument("--q-uniq-min", type=float, default=0.10)
     ew.add_argument("--doc-id", type=str, default=None)
     ew.add_argument("--company-id", type=str, default="default_company", help="Company identifier")
+
+    # --- embed-weaviate-company (todos los PDFs de una carpeta de empresa) ---
+    ewc = sub.add_parser("embed-weaviate-company", help="Embed + upsert todos los PDFs de una carpeta de empresa")
+    ewc.add_argument("company_id", type=str, help="Nombre de la carpeta de la empresa (será usado como company_id y collection)")
+    ewc.add_argument("--max-pages", type=int, default=None)
+    ewc.add_argument("--target", type=int, default=512)
+    ewc.add_argument("--overlap", type=int, default=64)
+    ewc.add_argument("--min-toks", type=int, default=50)
+    ewc.add_argument("--sep", type=str, default="\n\n\f\n\n")
+    ewc.add_argument("--q-min-toks", type=int, default=50)
+    ewc.add_argument("--q-min-chars", type=int, default=200)
+    ewc.add_argument("--q-alpha-min", type=float, default=0.30)
+    ewc.add_argument("--q-uniq-min", type=float, default=0.10)
 
     # --- bedrock-check (sanity de conexión) ---
     br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
@@ -268,6 +284,56 @@ def main():
             print(f"Archivo: {out.source_path}")
             print(f"Páginas: {out.page_count} | Chunks aceptados: {out.used_text_count}")
             print(f"Weaviate upsert -> escritos: {out.written} | colección: {settings.WEAVIATE_COLLECTION} | doc_id: {out.doc_id} | company_id: {getattr(args, 'company_id', 'default_company')}")
+        finally:
+            store.close()
+
+    elif args.cmd == "embed-weaviate-company":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        normalizer = TextNormalizer()
+        chunker = chunker_global.GlobalTokenChunker(
+            tokenizer,
+            chunker_global.GlobalChunkerConfig(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
+        embedder = BedrockTitanEmbedder()
+        store = WeaviateVectorStore()
+
+        try:
+            uc = EmbedAndUpsertCompanyPdfs(blob, extractor, normalizer, chunker, embedder, store)
+            out = uc.execute(EmbedAndUpsertCompanyPdfsInput(
+                company_id=args.company_id,
+                max_pages=args.max_pages,
+                chunker_cfg=chunker_global.GlobalChunkerConfig(
+                    target_tokens=args.target,
+                    overlap_tokens=args.overlap,
+                    min_tokens=args.min_toks,
+                    page_separator=args.sep,
+                ),
+                quality_cfg=QualityConfig(
+                    min_tokens=args.q_min_toks,
+                    min_chars=args.q_min_chars,
+                    min_alpha_ratio=args.q_alpha_min,
+                    min_unique_ratio=args.q_uniq_min,
+                ),
+            ))
+
+            print(f"Empresa: {out.company_id}")
+            print(f"Archivos procesados: {out.successful_files}/{out.total_files}")
+            print(f"Total chunks escritos: {out.total_chunks_written}")
+            print(f"Colección: {args.company_id}")
+            
+            for report in out.reports:
+                status = "✅" if report.success else "❌"
+                if report.success:
+                    print(f"{status} {report.file_path.name} -> {report.chunks_written} chunks (doc_id: {report.doc_id})")
+                else:
+                    print(f"{status} {report.file_path.name} -> Error: {report.error_message}")
         finally:
             store.close()
             

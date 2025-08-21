@@ -43,7 +43,7 @@ class WeaviateVectorStore(VectorStorePort):
         except Exception:
             pass
 
-    def upsert_chunks(self, doc_id: str, chunks: List, vectors: List[list[float]], company_id: str = "default_company") -> int:
+    def upsert_chunks(self, doc_id: str, chunks: List, vectors: List[list[float]], company_id: str = "default_company", collection_name: Optional[str] = None) -> int:
         if len(chunks) != len(vectors):
             raise ValueError("chunks y vectors deben tener la misma longitud.")
         if not chunks:
@@ -52,7 +52,10 @@ class WeaviateVectorStore(VectorStorePort):
         if any(len(v) != dim for v in vectors):
             raise ValueError("Todos los vectores deben tener la misma dimensión.")
 
-        coll = self.client.collections.get(self.collection_name)
+        # Use the provided collection name or fall back to default
+        target_collection = collection_name or self.collection_name
+        self._ensure_collection_exists(target_collection)
+        coll = self.client.collections.get(target_collection)
 
         total = 0
         bs = self.batch_size
@@ -98,15 +101,18 @@ class WeaviateVectorStore(VectorStorePort):
 
 
     def _ensure_collection(self) -> None:
+        self._ensure_collection_exists(self.collection_name)
+
+    def _ensure_collection_exists(self, collection_name: str) -> None:
         try:
-            self.client.collections.get(self.collection_name)
+            self.client.collections.get(collection_name)
             return
         except Exception:
             pass
 
         metric = self._metric_from_str(self.distance)
         self.client.collections.create(
-            name=self.collection_name,
+            name=collection_name,
             description="Chunks de manuales (BYOV)",
             vector_config=Configure.Vectors.self_provided(
                 name="default",
