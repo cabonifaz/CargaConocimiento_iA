@@ -5,6 +5,7 @@ from app.adapters.blob.local_fs import LocalFileSystemBlob
 from app.adapters.extract.pymupdf_text_extractor import PyMuPDFTextExtractor
 from app.adapters.tokenizer.simple_regex_tokenizer import SimpleRegexTokenizer
 from app.adapters.embedding.bedrock_titan_embedder import BedrockTitanEmbedder
+from app.adapters.vector_store.weaviate_store import WeaviateVectorStore
 
 from app.application.use_cases.extract_text_from_pdf import (
     ExtractTextFromPdf, ExtractTextInput
@@ -18,11 +19,14 @@ from app.application.use_cases.chunk_global_all import (
 from app.application.use_cases.embed_chunks_from_pdf import (
     EmbedChunksFromPdf, EmbedChunksFromPdfInput
 )
+from app.application.use_cases.embed_and_upsert_pdf import (
+    EmbedAndUpsertPdf, EmbedAndUpsertPdfInput
+)
 
 from app.domain.services.text_normalizer import TextNormalizer
-from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig
+import app.domain.services.chunker_global as chunker_global
 from app.domain.services.chunk_quality import QualityConfig
-
+from app.config.settings import settings
 
 
 def main():
@@ -64,7 +68,8 @@ def main():
     gall.add_argument("--q-uniq-min", type=float, default=0.10)
     gall.add_argument("--no-report", action="store_true", help="no generar archivo .jsonl")
     gall.add_argument("--dry-run", action="store_true", help="solo validar, no embebe ni sube (por ahora)")
-    # embedding
+
+    # --- embed-dry (hasta embeddings, sin upsert) ---
     embed = sub.add_parser("embed-dry", help="Pipeline hasta embeddings (sin upsert)")
     embed.add_argument("relative_path", type=str)
     embed.add_argument("--max-pages", type=int, default=None)
@@ -76,6 +81,24 @@ def main():
     embed.add_argument("--q-min-chars", type=int, default=200)
     embed.add_argument("--q-alpha-min", type=float, default=0.30)
     embed.add_argument("--q-uniq-min", type=float, default=0.10)
+
+    # --- embed-weaviate (un PDF: embeddings + upsert BYOV) ---
+    ew = sub.add_parser("embed-weaviate", help="Embed + upsert BYOV en Weaviate (un PDF)")
+    ew.add_argument("relative_path", type=str)
+    ew.add_argument("--max-pages", type=int, default=None)
+    ew.add_argument("--target", type=int, default=512)
+    ew.add_argument("--overlap", type=int, default=64)
+    ew.add_argument("--min-toks", type=int, default=50)
+    ew.add_argument("--sep", type=str, default="\n\n\f\n\n")
+    ew.add_argument("--q-min-toks", type=int, default=50)
+    ew.add_argument("--q-min-chars", type=int, default=200)
+    ew.add_argument("--q-alpha-min", type=float, default=0.30)
+    ew.add_argument("--q-uniq-min", type=float, default=0.10)
+    ew.add_argument("--doc-id", type=str, default=None)
+
+    # --- bedrock-check (sanity de conexión) ---
+    br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
+    br.add_argument("--text", type=str, required=True, help="Texto a embeddear")
 
     args = parser.parse_args()
 
@@ -94,12 +117,15 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = GlobalTokenChunker(tokenizer, GlobalChunkerConfig(
-            target_tokens=args.target,
-            overlap_tokens=args.overlap,
-            min_tokens=args.min_toks,
-            page_separator=args.sep,
-        ))
+        chunker = chunker_global.GlobalTokenChunker(
+            tokenizer,
+            chunker_global.GlobalChunkerConfig(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
         normalizer = TextNormalizer()
         uc = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
         out = uc.execute(ExtractNormalizeChunkGlobalInput(
@@ -118,18 +144,21 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = TextNormalizer()
-        chunker = GlobalTokenChunker(tokenizer, GlobalChunkerConfig(
-            target_tokens=args.target,
-            overlap_tokens=args.overlap,
-            min_tokens=args.min_toks,
-            page_separator=args.sep,
-        ))
+        chunker = chunker_global.GlobalTokenChunker(
+            tokenizer,
+            chunker_global.GlobalChunkerConfig(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
 
         uc = ChunkGlobalAll(blob, extractor, normalizer, chunker)
         out = uc.execute(ChunkGlobalAllInput(
             max_pages=args.max_pages,
             recursive=not args.non_recursive,
-            chunker_cfg=GlobalChunkerConfig(
+            chunker_cfg=chunker_global.GlobalChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -159,23 +188,23 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = TextNormalizer()
 
-        # chunker global
-        from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig
-        chunker = GlobalTokenChunker(tokenizer, GlobalChunkerConfig(
-            target_tokens=args.target,
-            overlap_tokens=args.overlap,
-            min_tokens=args.min_toks,
-            page_separator=args.sep,
-        ))
+        chunker = chunker_global.GlobalTokenChunker(
+            tokenizer,
+            chunker_global.GlobalChunkerConfig(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
 
-        # embedder bedrock
         embedder = BedrockTitanEmbedder()  # usa env: AWS_PROFILE, BEDROCK_REGION, BEDROCK_MODEL_ID, etc.
 
         uc = EmbedChunksFromPdf(blob, extractor, normalizer, chunker, embedder)
         out = uc.execute(EmbedChunksFromPdfInput(
             relative_path=Path(args.relative_path),
             max_pages=args.max_pages,
-            chunker_cfg=GlobalChunkerConfig(
+            chunker_cfg=chunker_global.GlobalChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -196,6 +225,57 @@ def main():
             print(f"Embeddings recibidos: {len(out.vectors)}  |  Dimensión: {dim}")
         else:
             print("No se generaron embeddings (0 textos después del filtro).")
+
+    elif args.cmd == "embed-weaviate":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        normalizer = TextNormalizer()
+        chunker = chunker_global.GlobalTokenChunker(
+            tokenizer,
+            chunker_global.GlobalChunkerConfig(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
+        embedder = BedrockTitanEmbedder()
+        store = WeaviateVectorStore()
+
+        try:
+            uc = EmbedAndUpsertPdf(blob, extractor, normalizer, chunker, embedder, store)
+            out = uc.execute(EmbedAndUpsertPdfInput(
+                relative_path=Path(args.relative_path),
+                max_pages=args.max_pages,
+                chunker_cfg=chunker_global.GlobalChunkerConfig(
+                    target_tokens=args.target,
+                    overlap_tokens=args.overlap,
+                    min_tokens=args.min_toks,
+                    page_separator=args.sep,
+                ),
+                quality_cfg=QualityConfig(
+                    min_tokens=args.q_min_toks,
+                    min_chars=args.q_min_chars,
+                    min_alpha_ratio=args.q_alpha_min,
+                    min_unique_ratio=args.q_uniq_min,
+                ),
+                doc_id=args.doc_id,
+            ))
+
+            print(f"Archivo: {out.source_path}")
+            print(f"Páginas: {out.page_count} | Chunks aceptados: {out.used_text_count}")
+            print(f"Weaviate upsert -> escritos: {out.written} | colección: {settings.WEAVIATE_COLLECTION} | doc_id: {out.doc_id}")
+        finally:
+            store.close()
+            
+    elif args.cmd == "bedrock-check":
+        embedder = BedrockTitanEmbedder()
+        vec = embedder.embed_texts([args.text])[0]
+        print(f"Texto: {args.text}")
+        print(f"Dimensión: {len(vec)}")
+        print(f"Primeros 10 valores: {vec[:10]}")
+
 
 if __name__ == "__main__":
     main()

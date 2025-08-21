@@ -1,0 +1,124 @@
+# src/app/adapters/vector_store/weaviate_store.py
+from __future__ import annotations
+from typing import List, Optional
+
+import weaviate
+from weaviate.classes.init import Auth, AdditionalConfig, Timeout
+from weaviate.classes.config import Configure, Property, DataType
+from weaviate.classes.data import DataObject
+
+
+from app.ports.outbound.vector_store import VectorStorePort
+from app.config.settings import settings
+
+class WeaviateVectorStore(VectorStorePort):
+    def __init__(
+        self,
+        url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        collection: Optional[str] = None,
+        distance: Optional[str] = None,
+        batch_size: Optional[int] = None,
+    ) -> None:
+        self.url = url or settings.WEAVIATE_URL
+        self.api_key = api_key or settings.WEAVIATE_API_KEY
+        self.collection_name = collection or settings.WEAVIATE_COLLECTION
+        self.distance = (distance or settings.WEAVIATE_DISTANCE).lower()
+        self.batch_size = batch_size or settings.WEAVIATE_BATCH_SIZE
+
+        if not self.url or not self.api_key:
+            raise RuntimeError("WEAVIATE_URL / WEAVIATE_API_KEY no configurados.")
+
+        # 🔧 REST-only + skip init checks para evitar el fallo gRPC
+        self.client = weaviate.connect_to_weaviate_cloud(
+            cluster_url=self.url,
+            auth_credentials=Auth.api_key(self.api_key),
+            skip_init_checks=True,
+            additional_config=AdditionalConfig(timeout=Timeout(init=30)),
+        )
+        self._ensure_collection()
+
+    def close(self) -> None:
+        try:
+            self.client.close()
+        except Exception:
+            pass
+
+    def upsert_chunks(self, doc_id: str, chunks: List, vectors: List[list[float]]) -> int:
+        if len(chunks) != len(vectors):
+            raise ValueError("chunks y vectors deben tener la misma longitud.")
+        if not chunks:
+            return 0
+        dim = len(vectors[0])
+        if any(len(v) != dim for v in vectors):
+            raise ValueError("Todos los vectores deben tener la misma dimensión.")
+
+        coll = self.client.collections.get(self.collection_name)
+
+        total = 0
+        bs = self.batch_size
+        for i in range(0, len(chunks), bs):
+            batch_chunks = chunks[i:i+bs]
+            batch_vecs = vectors[i:i+bs]
+
+            objs: list[DataObject] = []
+            for c, vec in zip(batch_chunks, batch_vecs):
+                props = {
+                    "doc_id": doc_id,
+                    "chunk_id": c.chunk_id,
+                    "text": c.text,
+                    "page_start": c.page_start,
+                    "page_end": c.page_end,
+                    "char_start": c.char_start,
+                    "char_end": c.char_end,
+                    "token_count": c.token_count,
+                }
+                objs.append(DataObject(
+                    properties=props,
+                    vector=vec,      # <- vector fuera de properties
+                    uuid=c.chunk_id  # <- id fuera de properties
+                ))
+
+            coll.data.insert_many(objs)
+            total += len(objs)
+
+        return total
+
+
+    def _ensure_collection(self) -> None:
+        try:
+            self.client.collections.get(self.collection_name)
+            return
+        except Exception:
+            pass
+
+        metric = self._metric_from_str(self.distance)
+        self.client.collections.create(
+            name=self.collection_name,
+            description="Chunks de manuales (BYOV)",
+            vector_config=Configure.Vectors.self_provided(
+                name="default",
+                vector_index_config=Configure.VectorIndex.hnsw(distance_metric=metric),
+            ),
+            properties=[
+                Property(name="doc_id", data_type=DataType.TEXT, index_searchable=True),
+                Property(name="chunk_id", data_type=DataType.TEXT, index_searchable=True),
+                Property(name="text", data_type=DataType.TEXT, index_searchable=True),
+                Property(name="page_start", data_type=DataType.INT),
+                Property(name="page_end", data_type=DataType.INT),
+                Property(name="char_start", data_type=DataType.INT),
+                Property(name="char_end", data_type=DataType.INT),
+                Property(name="token_count", data_type=DataType.INT),
+            ],
+        )
+
+    @staticmethod
+    def _metric_from_str(s: str):
+        s = (s or "cosine").lower()
+        if s == "cosine":
+            return "cosine"
+        if s in ("dot", "dotproduct", "dot_product"):
+            return "dot"
+        if s in ("l2", "l2-squared", "euclidean"):
+            return "l2-squared"
+        return "cosine"

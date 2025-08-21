@@ -1,0 +1,68 @@
+# src/app/application/use_cases/embed_and_upsert_pdf.py
+from __future__ import annotations
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from app.ports.outbound.blob_storage import BlobStoragePort
+from app.ports.outbound.text_extractor import TextExtractorPort
+from app.ports.outbound.embedder import EmbedderPort
+from app.ports.outbound.vector_store import VectorStorePort
+
+from app.domain.services.text_normalizer import TextNormalizer
+from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig
+from app.domain.services.chunk_quality import QualityConfig
+
+from app.application.use_cases.embed_chunks_from_pdf import (
+    EmbedChunksFromPdf, EmbedChunksFromPdfInput, EmbedChunksFromPdfOutput
+)
+
+@dataclass
+class EmbedAndUpsertPdfInput:
+    relative_path: Path
+    max_pages: Optional[int] = None
+    chunker_cfg: Optional[GlobalChunkerConfig] = None
+    quality_cfg: Optional[QualityConfig] = None
+    doc_id: Optional[str] = None  # si no viene, se usará el nombre de archivo (stem)
+
+@dataclass
+class EmbedAndUpsertPdfOutput:
+    source_path: Path
+    page_count: int
+    used_text_count: int
+    written: int
+    doc_id: str
+
+class EmbedAndUpsertPdf:
+    def __init__(
+        self,
+        blob: BlobStoragePort,
+        extractor: TextExtractorPort,
+        normalizer: TextNormalizer,
+        chunker: GlobalTokenChunker,
+        embedder: EmbedderPort,
+        vector_store: VectorStorePort,
+    ) -> None:
+        self.embedder_uc = EmbedChunksFromPdf(blob, extractor, normalizer, chunker, embedder)
+        self.vs = vector_store
+
+    def execute(self, params: EmbedAndUpsertPdfInput) -> EmbedAndUpsertPdfOutput:
+        out: EmbedChunksFromPdfOutput = self.embedder_uc.execute(EmbedChunksFromPdfInput(
+            relative_path=params.relative_path,
+            max_pages=params.max_pages,
+            chunker_cfg=params.chunker_cfg,
+            quality_cfg=params.quality_cfg,
+        ))
+
+        # doc_id por defecto = nombre de archivo (sin extensión)
+        doc_id = params.doc_id or Path(out.source_path).stem
+
+        written = self.vs.upsert_chunks(doc_id=doc_id, chunks=out.chunks, vectors=out.vectors)
+
+        return EmbedAndUpsertPdfOutput(
+            source_path=out.source_path,
+            page_count=out.page_count,
+            used_text_count=out.used_text_count,
+            written=written,
+            doc_id=doc_id,
+        )
