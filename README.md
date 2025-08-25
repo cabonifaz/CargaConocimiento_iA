@@ -48,35 +48,39 @@ python app/main.py
 
 ## CLI 
 
-La CLI expone 3 comandos pensados para un flujo simple por archivo y para todos los PDFs de `company_files/`.
+La CLI expone 7 comandos para procesar documentos PDF, desde extracción básica hasta carga completa en base de datos vectorial.
 
 **Requisitos previos**:
 - Activar venv e instalar dependencias
-- Colocar PDFs en `company_files/`
-- (Opcional) Ajustar variables en `.env` y `settings.py`
+- Colocar PDFs en `company_files/` (o subcarpetas para empresas)
+- Configurar variables AWS en `.env` y `settings.py` para embeddings y Weaviate
 
-### 1) `extract` — extracción (debug puntual)
+---
 
-Extrae texto **sin normalizar** para un PDF específico. Útil para inspección rápida si la extracción salió bien.
+### 1) `extract` — Extracción de texto (debug)
+
+Extrae texto **sin normalizar** de un PDF específico. Útil para inspección rápida del contenido extraído.
 
 ```bash
 python -m app.main extract <ruta_o_nombre.pdf> [--max-pages N]
-````
-
-* La `ruta` puede ser:
-
-  * solo el nombre dentro de `company_files/`
-  * con el prefijo `company_files/`
-  * una ruta **absoluta** dentro de esa carpeta
-* Ejemplo (Windows):
-
-```bash
-python -m app.main extract 8a49ffa4..._original.pdf --max-pages 3
 ```
 
-### 2) `chunk-global` — pipeline para **un** PDF
+**Parámetros:**
+* `ruta_o_nombre.pdf`: archivo dentro de `company_files/` o ruta relativa
+* `--max-pages`: límite de páginas a procesar (opcional)
 
-Ejecuta **extracción → normalización → chunking global con offsets** sobre un archivo.
+**Ejemplo:**
+```bash
+python -m app.main extract documento.pdf --max-pages 5
+```
+
+**Salida:** Muestra el texto extraído de cada página sin procesamiento adicional.
+
+---
+
+### 2) `chunk-global` — Chunking de un PDF
+
+Ejecuta el pipeline completo de **extracción → normalización → chunking global** sobre un archivo.
 
 ```bash
 python -m app.main chunk-global <ruta_o_nombre.pdf> \
@@ -85,19 +89,19 @@ python -m app.main chunk-global <ruta_o_nombre.pdf> \
   [--sep "\n\n\f\n\n"]
 ```
 
+**Parámetros de chunking:**
 * `--target`: tokens por chunk (recomendado 512–768)
-* `--overlap`: tokens de solapamiento (≈10–15% del target)
+* `--overlap`: tokens de solapamiento entre chunks (≈10–15% del target)
 * `--min-toks`: umbral mínimo de tokens por chunk
-* `--sep`: separador entre páginas en el texto unido (no suele cambiarse)
+* `--sep`: separador entre páginas en el texto unido
 
-**Salida (consola):**
+**Salida:** Información detallada de cada chunk generado con offsets de páginas y caracteres.
 
-* Páginas detectadas y total de chunks
-* Por cada chunk: `pages=start-end`, `toks`, `chars=start-end`, `chunk_id` y un preview del texto
+---
 
-### 3) `chunk-global-all` — pipeline para **todos** los PDFs
+### 3) `chunk-global-all` — Chunking masivo con reporte
 
-Procesa todos los PDFs de `company_files/` (recursivo por defecto), aplica validaciones de calidad y genera **reporte JSONL**.
+Procesa **todos los PDFs** de `company_files/` con validaciones de calidad y genera reporte JSONL.
 
 ```bash
 python -m app.main chunk-global-all \
@@ -107,33 +111,24 @@ python -m app.main chunk-global-all \
   [--no-report] [--dry-run]
 ```
 
-* **Quality gates:**
+**Validaciones de calidad (Quality Gates):**
+* `--q-min-toks`: mínimo de tokens por chunk aceptado
+* `--q-min-chars`: mínimo de caracteres por chunk  
+* `--q-alpha-min`: ratio mínimo de caracteres alfabéticos (0–1)
+* `--q-uniq-min`: diversidad léxica mínima (palabras únicas / total)
 
-  * `--q-min-toks`: mínimo de tokens por chunk aceptado
-  * `--q-min-chars`: mínimo de caracteres por chunk
-  * `--q-alpha-min`: razón mínima de caracteres alfabéticos (0–1)
-  * `--q-uniq-min`: diversidad léxica mínima (únicas / total palabras)
-* **Reporte**:
+**Opciones adicionales:**
+* `--non-recursive`: no buscar en subdirectorios
+* `--no-report`: no generar archivo JSONL
+* `--dry-run`: solo validar, no procesar realmente
 
-  * Por defecto genera `data/output/chunk-global-report-YYYYMMDD-HHMMSS.jsonl`
-  * Cada línea es un JSON con métricas por archivo: `pages`, `chunks_total`, `chunks_accepted`, `avg_tokens`, `min_tokens`, `max_tokens`, `warnings`…
+**Reporte:** Genera `data/output/chunk-global-report-YYYYMMDD-HHMMSS.jsonl` con métricas detalladas.
 
-**Ejemplos:**
+---
 
-```bash
-# Procesar todos los PDFs con parámetros recomendados
-python -m app.main chunk-global-all --max-pages 200
+### 4) `embed-dry` — Embeddings sin almacenar
 
-# Ajustar validaciones de calidad
-python -m app.main chunk-global-all --q-alpha-min 0.25 --q-uniq-min 0.08
-
-# Sin reporte, solo consola
-python -m app.main chunk-global-all --no-report
-```
-
-### 4) `embed-dry` — pipeline para **embeddings**
-
-Ejecuta **extracción → normalización → chunking global → embeddings** sobre un archivo.
+Ejecuta **extracción → normalización → chunking → embeddings** sobre un archivo **sin guardar en base de datos**.
 
 ```bash
 python -m app.main embed-dry <ruta_o_nombre.pdf> \
@@ -143,24 +138,97 @@ python -m app.main embed-dry <ruta_o_nombre.pdf> \
   [--q-min-toks 50] [--q-min-chars 200] [--q-alpha-min 0.30] [--q-uniq-min 0.10]
 ```
 
-* `--target`: tokens por chunk (recomendado 512–768)
-* `--overlap`: tokens de solapamiento (≈10–15% del target)
-* `--min-toks`: umbral mínimo de tokens por chunk
-* `--sep`: separador entre páginas en el texto unido (no suele cambiarse)
+**Propósito:** Testear embeddings y validar configuración antes de subir a Weaviate.
 
-**Salida (consola):**
+**Salida:** Información de chunks generados y dimensión de vectores obtenidos.
 
-* Páginas detectadas y total de chunks
-* Por cada chunk: `pages=start-end`, `toks`, `chars=start-end`, `chunk_id` y un preview del texto
+---
 
-**Ejemplos**
+### 5) `embed-weaviate` — Carga individual a Weaviate
+
+Procesa **un PDF individual** y lo carga en Weaviate con embeddings de AWS Bedrock.
 
 ```bash
-# Procesar un PDF específico
-python -m app.main embed-dry 8a49ffa4..._original.pdf --max-pages 3
+python -m app.main embed-weaviate <ruta_o_nombre.pdf> \
+  [--max-pages N] \
+  [--target 512] [--overlap 64] [--min-toks 50] \
+  [--sep "\n\n\f\n\n"] \
+  [--q-min-toks 50] [--q-min-chars 200] [--q-alpha-min 0.30] [--q-uniq-min 0.10] \
+  [--doc-id ID_PERSONALIZADO] [--company-id EMPRESA]
+```
 
-# Ajustar parámetros de chunking
-python -m app.main embed-dry 8a49ffa4..._original.pdf --target 768 --overlap 128
+**Parámetros específicos:**
+* `--doc-id`: ID personalizado del documento (por defecto: nombre del archivo)
+* `--company-id`: identificador de empresa (por defecto: "default_company")
 
-# Sin validaciones de calidad
-python -m app.main embed-dry 8a49ffa4..._original.pdf --q-min-toks 0 --q-min-chars 0
+**Funcionalidad:**
+* Genera embeddings con AWS Bedrock Titan
+* Almacena en colección configurada en `WEAVIATE_COLLECTION`
+* Soporte para upsert (actualiza si ya existe)
+
+---
+
+### 6) `embed-weaviate-company` — Carga masiva por empresa
+
+Procesa **todos los PDFs de una carpeta de empresa** y los carga en una colección específica de Weaviate.
+
+```bash
+python -m app.main embed-weaviate-company <nombre_empresa> \
+  [--max-pages N] \
+  [--target 512] [--overlap 64] [--min-toks 50] \
+  [--sep "\n\n\f\n\n"] \
+  [--q-min-toks 50] [--q-min-chars 200] [--q-alpha-min 0.30] [--q-uniq-min 0.10]
+```
+
+**Comportamiento:**
+* **Carpeta origen:** `company_files/<nombre_empresa>/`
+* **Colección destino:** `<nombre_empresa>` (mismo nombre)
+* **Company ID:** `<nombre_empresa>`
+* **Procesamiento:** Todos los PDFs de la carpeta
+
+**Ejemplo:**
+```bash
+python -m app.main embed-weaviate-company Testv2 --max-pages 200 --target 512
+```
+
+**Ventajas:**
+* Organización automática por empresa
+* Colecciones separadas en Weaviate
+* Procesamiento masivo eficiente
+* Soporte para upsert al re-ejecutar
+
+---
+
+### 7) `bedrock-check` — Verificación de conectividad
+
+Prueba la conexión con AWS Bedrock embebiendo un texto de prueba.
+
+```bash
+python -m app.main bedrock-check --text "Texto de prueba para embeddings"
+```
+
+**Propósito:** Validar configuración de AWS y conectividad con Bedrock antes de procesamiento masivo.
+
+**Salida:** Dimensión del vector y primeros valores del embedding generado.
+
+---
+
+## Flujo de trabajo recomendado
+
+1. **Verificar conectividad:** `bedrock-check`
+2. **Prueba individual:** `extract` → `chunk-global` → `embed-dry`
+3. **Carga individual:** `embed-weaviate`
+4. **Carga masiva por empresa:** `embed-weaviate-company`
+5. **Procesamiento completo:** `chunk-global-all` para métricas
+
+## Configuración
+
+**Variables de entorno clave (.env):**
+```
+AWS_PROFILE=tu-perfil
+BEDROCK_REGION=us-east-2
+BEDROCK_MODEL_ID=amazon.titan-embed-text-v2:0
+WEAVIATE_URL=https://tu-cluster.weaviate.network
+WEAVIATE_API_KEY=tu-api-key
+WEAVIATE_COLLECTION=CloudPointComputing
+```
