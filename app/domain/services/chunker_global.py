@@ -40,8 +40,11 @@ class GlobalTokenChunker:
 
     def chunk_document(self, pages: List[str]) -> Tuple[List[GlobalChunk], str]:
         """Une las páginas, realiza chunking global y devuelve (chunks, full_text)."""
+        print("### Global Token Chunker - Chunk document")
         full_text, page_offsets = self._join_pages_and_offsets(pages)
+        print(f"- Documento unido tiene {len(full_text)} chars y {len(page_offsets)} páginas.")
         chunks = self._chunk_over_text(full_text, page_offsets)
+        print(f"- Chunking global produjo {len(chunks)} chunks.\n---")
         return chunks, full_text
 
     # ---------- Internos ----------

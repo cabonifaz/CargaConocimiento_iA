@@ -46,14 +46,22 @@ class BedrockTitanEmbedder(EmbedderPort):
     def embed_texts(self, texts: List[str]) -> List[list[float]]:
         if not texts:
             return []
+        
+        print(f"### Bedrock Titan Embedder - embed_texts -> List[list[float]]")
 
         vectors: List[list[float]] = []
-        for i in range(0, len(texts), self.batch_size):
+        for i in range(0, len(texts), self.batch_size):            
             batch = texts[i : i + self.batch_size]
+
+            print(f"Procesando batch de {len(batch)} textos (total {len(texts)})...")
+
             # Titan embeddings procesa un texto por invocación -> llamamos por cada item del batch
             for t in batch:
                 vec = self._embed_one(t)
+                print(f"\r\033[2K- Vector recibido ({len(vec)} dims). ", end='', flush=True)  # \033[2K limpia la línea
                 vectors.append(vec)
+                print(f"-> {len(vectors)}/{len(texts)} embeddings procesados.", end='', flush=True)  # \033[2K limpia la línea
+        print("\n---")
         return vectors
 
     # --------------- Internos ---------------
@@ -73,9 +81,11 @@ class BedrockTitanEmbedder(EmbedderPort):
         backoff = 1.0
         while True:
             try:
+                print(f"\r\033[2K- Invocando modelo {self.model_id}...", end='', flush=True)  # \033[2K limpia la línea
                 resp = self.client.invoke_model(modelId=self.model_id, body=payload)
                 # bedrock-runtime retorna bytes en resp["body"]
                 raw = resp.get("body").read()
+                print(f"\r\033[2K- Respuesta recibida ({len(raw)} bytes). Procesando...", end='', flush=True)  # \033[2K limpia la línea
                 data = json.loads(raw.decode("utf-8"))
                 emb = data.get("embedding") or data.get("vector")  # por si la clave difiere
                 if not isinstance(emb, list):

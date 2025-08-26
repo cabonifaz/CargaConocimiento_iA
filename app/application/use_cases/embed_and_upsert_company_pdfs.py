@@ -65,7 +65,7 @@ class EmbedAndUpsertCompanyPdfs:
 
         for pdf_file in pdf_files:
             try:
-                print(f"🕑 Now processing {pdf_file}...")
+                print(f"🕑 Procesando archivo {pdf_file.name}...")
                 # Use relative path from company_files
                 relative_path = Path(params.company_id) / pdf_file.name
                 
@@ -97,7 +97,7 @@ class EmbedAndUpsertCompanyPdfs:
                 total_chunks += written
                 successful_count += 1
 
-                print(f"✅ Finished processing {pdf_file}.\n")
+                print(f"\n✅ Procesamiento exitoso del archivo {pdf_file.name}.\n\n---")
                 
             except Exception as e:
                 reports.append(CompanyFileReport(

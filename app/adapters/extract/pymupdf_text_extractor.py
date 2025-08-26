@@ -21,6 +21,7 @@ class PyMuPDFTextExtractor(TextExtractorPort):
         self.cfg = config or PyMuPDFConfig()
 
     def extract_from_bytes(self, data: bytes, max_pages: Optional[int] = None) -> TextExtractionResult:
+        print("### PyMuPDF Text Extractor - extract_from_bytes -> pages: List[str], page_count: int, producer: Optional[str]:")
         hard_cap = max_pages if max_pages is not None else self.cfg.max_pages
 
         doc = pymupdf.open(stream=data)
@@ -44,6 +45,13 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             # Clave típica en metadata es 'producer'
             if isinstance(meta, dict):
                 producer = meta.get("producer") or meta.get("Producer")
+
+            print(f"- {len(pages)} páginas extraídas (de {page_total})")
+
+            for i, p in enumerate(pages):
+                print(f"- Página {i+1} ({len(p)} chars):\n  {p[:50]!r}...")
+
+            print("---")
 
             return TextExtractionResult(
                 pages=pages,
