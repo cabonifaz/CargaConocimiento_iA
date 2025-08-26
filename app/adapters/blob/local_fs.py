@@ -71,4 +71,6 @@ class LocalFileSystemBlob(BlobStoragePort):
         if max_bytes is not None:
             with path.open("rb") as fh:
                 return fh.read(max_bytes)
-        return path.read_bytes()
+        bytes = path.read_bytes()
+        print(f"{len(bytes)} bytes obtenidos de {path}")
+        return bytes

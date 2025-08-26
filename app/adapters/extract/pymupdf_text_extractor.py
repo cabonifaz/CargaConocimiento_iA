@@ -35,7 +35,7 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
             for i in range(limit):
                 page = doc.load_page(i)
-                txt = page.get_text("text", sort=self.cfg.sort_text)
+                txt = page.get_textpage().extractTEXT(sort=self.cfg.sort_text)
                 # Normaliza saltos finales de PyMuPDF
                 pages.append(txt.rstrip("\n"))
 

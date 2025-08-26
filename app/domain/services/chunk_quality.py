@@ -4,8 +4,10 @@ from typing import Protocol
 
 # Para no acoplar al tipo concreto del chunk global:
 class HasTextTok(Protocol):
-    text: str
-    token_count: int
+    @property
+    def text(self) -> str: ...
+    @property
+    def token_count(self) -> int: ...
 
 @dataclass(frozen=True)
 class QualityConfig:

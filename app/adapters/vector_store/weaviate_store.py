@@ -3,7 +3,7 @@ from uuid import uuid5, NAMESPACE_URL
 
 import weaviate
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
-from weaviate.classes.config import Configure, Property, DataType
+from weaviate.classes.config import Configure, Property, DataType, VectorDistances
 from weaviate.classes.data import DataObject
 from weaviate.exceptions import WeaviateBaseError
 
@@ -63,7 +63,7 @@ class WeaviateVectorStore(VectorStorePort):
             batch_chunks = chunks[i:i+bs]
             batch_vecs = vectors[i:i+bs]
 
-            objs: list[DataObject] = []
+            objs: list = []
             id_map: list[tuple[dict, list[float], str]] = []
 
             for c, vec in zip(batch_chunks, batch_vecs):
@@ -135,9 +135,9 @@ class WeaviateVectorStore(VectorStorePort):
     def _metric_from_str(s: str):
         s = (s or "cosine").lower()
         if s == "cosine":
-            return "cosine"
+            return VectorDistances.COSINE
         if s in ("dot", "dotproduct", "dot_product"):
-            return "dot"
+            return VectorDistances.DOT
         if s in ("l2", "l2-squared", "euclidean"):
-            return "l2-squared"
-        return "cosine"
+            return VectorDistances.L2_SQUARED
+        return VectorDistances.COSINE

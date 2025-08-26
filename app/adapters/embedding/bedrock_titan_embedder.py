@@ -61,7 +61,7 @@ class BedrockTitanEmbedder(EmbedderPort):
     def _embed_one(self, text: str) -> list[float]:
         # Construcción del cuerpo según Titan v2.
         # Para v2, el campo principal es "inputText". La dimensión es opcional.
-        body = {"inputText": text}
+        body: dict[str, str | int] = {"inputText": text}
         if self.dim:
             # Algunas versiones aceptan "dimensions"; otras "embeddingConfig".
             # Usamos "dimensions" si dim está definido; si tu región requiere el otro nombre, cámbialo aquí.

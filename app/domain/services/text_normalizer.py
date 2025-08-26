@@ -13,7 +13,7 @@ _ZW_CHARS = [
 
 @dataclass(frozen=True)
 class NormalizerConfig:
-    unicode_form: str = "NFC"          # "NFC" / "NFKC"
+    unicode_form: unicodedata._NormalizationForm = "NFC"          # "NFC" / "NFKC"
     collapse_whitespace: bool = True   # colapsar espacios en blanco consecutivos
     strip_control_chars: bool = True   # remover \x00-\x1F excepto \n\t
     normalize_nbsp: bool = True        # reemplaza NBSP por espacio normal

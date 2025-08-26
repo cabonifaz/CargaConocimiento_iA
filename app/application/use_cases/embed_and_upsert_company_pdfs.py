@@ -65,6 +65,7 @@ class EmbedAndUpsertCompanyPdfs:
 
         for pdf_file in pdf_files:
             try:
+                print(f"🕑 Now processing {pdf_file}...")
                 # Use relative path from company_files
                 relative_path = Path(params.company_id) / pdf_file.name
                 
@@ -75,7 +76,7 @@ class EmbedAndUpsertCompanyPdfs:
                     chunker_cfg=params.chunker_cfg,
                     quality_cfg=params.quality_cfg,
                 ))
-                
+
                 # Then upsert to collection with company name
                 doc_id = pdf_file.stem
                 written = self.vector_store.upsert_chunks(
@@ -85,7 +86,7 @@ class EmbedAndUpsertCompanyPdfs:
                     company_id=params.company_id,
                     collection_name=params.company_id  # Use company_id as collection name
                 )
-                
+
                 reports.append(CompanyFileReport(
                     file_path=pdf_file,
                     success=True,
@@ -95,6 +96,8 @@ class EmbedAndUpsertCompanyPdfs:
                 
                 total_chunks += written
                 successful_count += 1
+
+                print(f"✅ Finished processing {pdf_file}.\n")
                 
             except Exception as e:
                 reports.append(CompanyFileReport(
@@ -118,7 +121,7 @@ class EmbedAndUpsertCompanyPdfs:
         if not company_folder.exists():
             return []
         
-        pdf_files = []
+        pdf_files: List[Path] = []
         for file_path in company_folder.iterdir():
             if file_path.is_file() and file_path.suffix.lower() == '.pdf':
                 pdf_files.append(file_path)
