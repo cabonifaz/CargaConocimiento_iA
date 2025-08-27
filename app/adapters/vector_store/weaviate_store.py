@@ -3,7 +3,7 @@ from uuid import uuid5, NAMESPACE_URL
 
 import weaviate
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
-from weaviate.classes.config import Configure, Property, DataType
+from weaviate.classes.config import Configure, Property, DataType, VectorDistances
 from weaviate.classes.data import DataObject
 from weaviate.exceptions import WeaviateBaseError
 
@@ -44,10 +44,13 @@ class WeaviateVectorStore(VectorStorePort):
             pass
 
     def upsert_chunks(self, doc_id: str, chunks: List, vectors: List[list[float]], company_id: str = "default_company", collection_name: Optional[str] = None) -> int:
+        print(f"### Weaviate Vector Store - upsert_chunks -> int")
+
         if len(chunks) != len(vectors):
             raise ValueError("chunks y vectors deben tener la misma longitud.")
         if not chunks:
             return 0
+
         dim = len(vectors[0])
         if any(len(v) != dim for v in vectors):
             raise ValueError("Todos los vectores deben tener la misma dimensión.")
@@ -55,15 +58,21 @@ class WeaviateVectorStore(VectorStorePort):
         # Use the provided collection name or fall back to default
         target_collection = collection_name or self.collection_name
         self._ensure_collection_exists(target_collection)
+
+        print(f"- Upsert de {len(chunks)} chunks en Weaviate collection '{target_collection}'...")
+
         coll = self.client.collections.get(target_collection)
 
         total = 0
         bs = self.batch_size
+
+        print(f"- Usando batch size {bs}, distancia '{self.distance}', dimensión {dim}.")
+
         for i in range(0, len(chunks), bs):
             batch_chunks = chunks[i:i+bs]
             batch_vecs = vectors[i:i+bs]
 
-            objs: list[DataObject] = []
+            objs: list = []
             id_map: list[tuple[dict, list[float], str]] = []
 
             for c, vec in zip(batch_chunks, batch_vecs):
@@ -84,8 +93,11 @@ class WeaviateVectorStore(VectorStorePort):
                 id_map.append((props, vec, uid))
 
             try:
+                print(f"\r\033[2K- Upserting batch de {len(objs)} chunks... ", end='', flush=True)  # \033[2K limpia la línea
                 # intento rápido en batch
                 coll.data.insert_many(objs)
+                print(f"-> Upsert completado con éxito. ({len(objs)} items subidos).")
+
                 total += len(objs)
             except WeaviateBaseError:
                 # fallback: upsert por ítem (insert → replace si ya existe)
@@ -96,7 +108,7 @@ class WeaviateVectorStore(VectorStorePort):
                         # si ya existe u otro conflicto, hacemos replace (sobrescribe todo)
                         coll.data.replace(uuid=uid, properties=props, vector=vec)
                     total += 1
-
+        print(f"- Upsert finalizado. Total chunks cargados: {total}.\n---")
         return total
 
 
@@ -135,9 +147,9 @@ class WeaviateVectorStore(VectorStorePort):
     def _metric_from_str(s: str):
         s = (s or "cosine").lower()
         if s == "cosine":
-            return "cosine"
+            return VectorDistances.COSINE
         if s in ("dot", "dotproduct", "dot_product"):
-            return "dot"
+            return VectorDistances.DOT
         if s in ("l2", "l2-squared", "euclidean"):
-            return "l2-squared"
-        return "cosine"
+            return VectorDistances.L2_SQUARED
+        return VectorDistances.COSINE

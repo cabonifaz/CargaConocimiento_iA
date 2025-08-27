@@ -55,7 +55,10 @@ class EmbedChunksFromPdf:
 
         # 2) quality gate
         quality = ChunkQuality(params.quality_cfg) if params.quality_cfg else ChunkQuality()
+
+        print("### Chunk Quality - good")
         good = [c for c in chunks if quality.good(c)]
+        print("\n---")
 
         # 3) embeddings (solo texto)
         texts = [c.text for c in good]

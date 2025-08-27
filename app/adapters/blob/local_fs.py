@@ -65,10 +65,13 @@ class LocalFileSystemBlob(BlobStoragePort):
         return valid
 
     def read_bytes(self, path: Path, max_bytes: Optional[int] = None) -> bytes:
+        print("---\n### Local File Storage - read_bytes -> bytes:")
         if not path.exists() or not path.is_file():
             raise FileNotFoundError(str(path))
         # lectura acotada si se solicita
         if max_bytes is not None:
             with path.open("rb") as fh:
                 return fh.read(max_bytes)
-        return path.read_bytes()
+        bytes = path.read_bytes()
+        print(f"- {len(bytes)} bytes obtenidos de {path}\n---")
+        return bytes

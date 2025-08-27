@@ -13,7 +13,7 @@ _ZW_CHARS = [
 
 @dataclass(frozen=True)
 class NormalizerConfig:
-    unicode_form: str = "NFC"          # "NFC" / "NFKC"
+    unicode_form: unicodedata._NormalizationForm = "NFC"          # "NFC" / "NFKC"
     collapse_whitespace: bool = True   # colapsar espacios en blanco consecutivos
     strip_control_chars: bool = True   # remover \x00-\x1F excepto \n\t
     normalize_nbsp: bool = True        # reemplaza NBSP por espacio normal
@@ -27,8 +27,17 @@ class TextNormalizer:
         self.cfg = cfg or NormalizerConfig()
 
     def normalize_pages(self, pages: List[str]) -> List[str]:
+        print("### Text Normalizer - normalize_pages -> List[str]:")
         """Normaliza cada página independientemente (mismo largo que 'pages')."""
-        return [self._normalize_page(p) for p in pages]
+        normalization_result: List[str] = []
+        for i, p in enumerate(pages):
+            print(f"Normalización de página {i+1}")
+            normalization_result.append(self._normalize_page(p))
+            print(f"-> Página {i+1} normalizada ({len(p)} -> {len(normalization_result[-1])} chars).")
+
+        print("---")
+
+        return normalization_result
 
     def normalize_and_join(self, pages: List[str]) -> str:
         """Normaliza y devuelve un único string (todas las páginas unidas)."""
@@ -41,27 +50,40 @@ class TextNormalizer:
     def _normalize_page(self, text: str) -> str:
         t = text or ""
 
+        print("Subprocesos:", end=" ")
+
         # 1) Unicode canonical / compatibility normalization
         if self.cfg.unicode_form:
             t = unicodedata.normalize(self.cfg.unicode_form, t)
+            print(f"\r\033[2K- 1/7 subprocesos completados", end='', flush=True)  # \033[2K limpia la línea
+
 
         # 2) Normaliza NBSP (no-break space) a espacio regular
         if self.cfg.normalize_nbsp:
             t = t.replace("\u00A0", " ")
+            print(f"\r\033[2K- 2/7 subprocesos completados", end='', flush=True)  # \033[2K limpia la línea
+
 
         # 3) Remueve zero-width chars
         if self.cfg.remove_zero_width:
             for zw in _ZW_CHARS:
                 t = t.replace(zw, "")
+            print(f"\r\033[2K- 3/7 subprocesos completados", end='', flush=True)  # \033[2K limpia la línea
+            
 
         # 4) Remueve caracteres de control (excepto \n, \t)
         if self.cfg.strip_control_chars:
             t = re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]", "", t)
+            print("(4) Caracteres de control removidos.", end=" ")
+            print(f"\r\033[2K- 4/7 subprocesos completados", end='', flush=True)  # \033[2K limpia la línea
+
 
         # 5) Repara guiones de final de línea (hyphenation) si parecen cortes
         #    Regla heurística: 'palabra-\ncontinuacion' -> 'palabracontinuacion'
         if self.cfg.fix_broken_hyphens:
             t = re.sub(r"(\w)-\n(\w)", r"\1\2", t)
+            print(f"\r\033[2K- 5/7 subprocesos completados", end='', flush=True)  # \033[2K limpia la línea
+
 
         # 6) Unir saltos de línea “suaves” en el mismo párrafo
         #    Heurística: si una línea termina con letra/número y la siguiente inicia en minúscula,
@@ -77,6 +99,7 @@ class TextNormalizer:
             # Restaura párrafos
             if self.cfg.keep_double_newlines:
                 t = t.replace(placeholder, "\n\n")
+            print(f"\r\033[2K- 6/7 subprocesos completados", end='', flush=True)  # \033[2K limpia la línea
 
         # 7) Colapsa espacios en blanco redundantes (sin tocar dobles \n\n)
         if self.cfg.collapse_whitespace:
@@ -86,6 +109,9 @@ class TextNormalizer:
             t = re.sub(r"[ \t]+\n", "\n", t)
             # Trim de cada línea
             t = "\n".join(line.strip() for line in t.splitlines())
+            print(f"\r\033[2K- 7/7 subprocesos completados", end=' ', flush=True)
+
+        global_trim = t.strip()
 
         # Trim global final
-        return t.strip()
+        return global_trim

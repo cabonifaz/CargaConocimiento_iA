@@ -128,7 +128,7 @@ def main():
         print(f"Archivo: {out.source_path}")
         print(f"Páginas extraídas: {out.result.page_count}")
         for i, page in enumerate(out.result.pages, start=1):
-            print(f"\n--- Página {i} ---\n{page[:1000]}")  # primeras 1000 chars para inspección
+            print(f"\n--- Página {i} ---\n{page[:50]}...")  # primeras 1000 chars para inspección
 
     elif args.cmd == "chunk-global":
         blob = LocalFileSystemBlob()
