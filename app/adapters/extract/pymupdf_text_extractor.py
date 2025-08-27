@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Optional, List
 
+import pathlib
 import pymupdf
+import pymupdf4llm
 from app.ports.outbound.text_extractor import TextExtractorPort, TextExtractionResult
 
 
@@ -35,10 +37,11 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             limit = min(page_total, hard_cap) if hard_cap is not None else page_total
 
             for i in range(limit):
-                page = doc.load_page(i)
-                txt = page.get_textpage().extractTEXT(sort=self.cfg.sort_text)
-                # Normaliza saltos finales de PyMuPDF
-                pages.append(txt.rstrip("\n"))
+                """ page = doc.load_page(i)
+                txt = page.get_textpage().extractTEXT(sort=self.cfg.sort_text) """
+                md_page_text = pymupdf4llm.to_markdown(doc, pages=[i])
+                
+                pages.append(md_page_text.rstrip("\n"))
 
             meta = doc.metadata or {}
             producer = None
@@ -51,7 +54,8 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             for i, p in enumerate(pages):
                 print(f"- Página {i+1} ({len(p)} chars):\n  {p[:50]!r}...")
 
-            print("---")
+            # Reporte de extracción
+            pathlib.Path("report/text-extraction.md").write_text("\n\n---\n**END OF PAGE**\n---\n\n".join(pages), encoding="utf-8")
 
             return TextExtractionResult(
                 pages=pages,
