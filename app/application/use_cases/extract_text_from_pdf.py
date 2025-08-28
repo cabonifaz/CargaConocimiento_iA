@@ -11,6 +11,7 @@ from app.config.settings import settings
 class ExtractTextInput:
     relative_path: Path
     max_pages: Optional[int] = None
+    generate_report: Optional[bool] = False
 
 @dataclass
 class ExtractTextOutput:
@@ -45,4 +46,18 @@ class ExtractTextFromPdf:
         # Leer bytes y extraer
         data = self.blob.read_bytes(target)
         res = self.extractor.extract_from_bytes(data, max_pages=params.max_pages)
+
+        if params.generate_report:
+            report_dir = Path("report/extraction")
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / f"{target.stem}_extraction_report.txt"
+            with report_path.open("w", encoding="utf-8") as report_file:
+                report_file.write(f"Reporte de extracción para: {target}\n")
+                report_file.write(f"Páginas extraídas: {len(res.pages)}\n\n")
+                for i, page in enumerate(res.pages):
+                    report_file.write(f"--- Página {i+1} ---\n")
+                    report_file.write(page + "\n\n")
+            print(f"Reporte de extracción guardado en: {report_path}")
+
+        print(f"Texto extraído del archivo : {target}\n(páginas: {len(res.pages)})")
         return ExtractTextOutput(result=res, source_path=target)

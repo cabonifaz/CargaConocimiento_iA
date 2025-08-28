@@ -10,6 +10,9 @@ from app.adapters.vector_store.weaviate_store import WeaviateVectorStore
 from app.application.use_cases.extract_text_from_pdf import (
     ExtractTextFromPdf, ExtractTextInput
 )
+from app.application.use_cases.extract_and_normalize_pdf import (
+    ExtractAndNormalizePdf, ExtractAndNormalizeInput
+)
 from app.application.use_cases.extract_normalize_chunk_global_pdf import (
     ExtractNormalizeChunkGlobalPdf, ExtractNormalizeChunkGlobalInput
 )
@@ -27,7 +30,9 @@ from app.application.use_cases.embed_and_upsert_company_pdfs import (
 )
 
 from app.domain.services.text_normalizer import TextNormalizer
+from app.domain.services.md_text_normalizer import MdTextNormalizer
 import app.domain.services.chunker_global as chunker_global
+import app.domain.services.chunker_global_md as chunker_global_md
 from app.domain.services.chunk_quality import QualityConfig
 from app.config.settings import settings
 
@@ -45,6 +50,12 @@ def main():
               "o incluir el prefijo 'company_files/', o una ruta absoluta dentro de esa carpeta")
     )
     ext.add_argument("--max-pages", type=int, default=None)
+    ext.add_argument("--generate-report", action="store_true", help="Generar reporte de extracción")
+
+    # --- normalize (debug puntual) ---
+    norm = sub.add_parser("normalize", help="Normalizar texto extraído (debug)")
+    norm.add_argument("relative_path", type=str, help="ruta al archivo de texto a normalizar")
+    norm.add_argument("--generate-report", action="store_true", help="Generar reporte de normalización")
 
     # --- chunk-global (1 archivo) ---
     gchunk = sub.add_parser("chunk-global", help="Extraer, normalizar y chunkear GLOBAL un PDF")
@@ -54,6 +65,16 @@ def main():
     gchunk.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
     gchunk.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
     gchunk.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
+    
+    # --- chunk-global-md (1 archivo) ---
+    gchunkmd = sub.add_parser("chunk-global-md", help="Extraer, normalizar y chunkear GLOBAL un PDF")
+    gchunkmd.add_argument("relative_path", type=str)
+    gchunkmd.add_argument("--max-pages", type=int, default=None)
+    gchunkmd.add_argument("--target", type=int, default=512, help="tokens por chunk")
+    gchunkmd.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
+    gchunkmd.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
+    gchunkmd.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
+    gchunkmd.add_argument("--generate-report", action="store_true", help="Generar reporte de extracción y normalización")
 
     # --- chunk-global-all (todos los PDFs + validación + reporte) ---
     gall = sub.add_parser("chunk-global-all", help="Chunking global + validación para TODOS los PDFs")
@@ -99,6 +120,7 @@ def main():
     ew.add_argument("--q-uniq-min", type=float, default=0.10)
     ew.add_argument("--doc-id", type=str, default=None)
     ew.add_argument("--company-id", type=str, default="default_company", help="Company identifier")
+    ew.add_argument("--generate-report", action="store_true", help="Generar reportes de extracción, normalización y chunking")
 
     # --- embed-weaviate-company (todos los PDFs de una carpeta de empresa) ---
     ewc = sub.add_parser("embed-weaviate-company", help="Embed + upsert todos los PDFs de una carpeta de empresa")
@@ -112,6 +134,7 @@ def main():
     ewc.add_argument("--q-min-chars", type=int, default=200)
     ewc.add_argument("--q-alpha-min", type=float, default=0.30)
     ewc.add_argument("--q-uniq-min", type=float, default=0.10)
+    ewc.add_argument("--generate-report", action="store_true", help="Generar reportes de extracción, normalización y chunking")
 
     # --- bedrock-check (sanity de conexión) ---
     br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
@@ -124,11 +147,20 @@ def main():
         extractor = PyMuPDFTextExtractor()
         uc = ExtractTextFromPdf(blob, extractor)
 
-        out = uc.execute(ExtractTextInput(relative_path=Path(args.relative_path), max_pages=args.max_pages))
+        out = uc.execute(ExtractTextInput(relative_path=Path(args.relative_path), max_pages=args.max_pages, generate_report=args.generate_report))
         print(f"Archivo: {out.source_path}")
         print(f"Páginas extraídas: {out.result.page_count}")
         for i, page in enumerate(out.result.pages, start=1):
             print(f"\n--- Página {i} ---\n{page[:50]}...")  # primeras 1000 chars para inspección
+
+    elif args.cmd == "normalize":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        normalizer = MdTextNormalizer()
+        uc = ExtractAndNormalizePdf(blob, extractor, normalizer)
+        out = uc.execute(ExtractAndNormalizeInput(relative_path=Path(args.relative_path), generate_report=args.generate_report))
+        print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
+        print(f"Texto normalizado!")  # primeras 1000 chars para inspección
 
     elif args.cmd == "chunk-global":
         blob = LocalFileSystemBlob()
@@ -143,11 +175,38 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        normalizer = TextNormalizer()
+        normalizer = MdTextNormalizer()
         uc = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
         out = uc.execute(ExtractNormalizeChunkGlobalInput(
             relative_path=Path(args.relative_path),
             max_pages=args.max_pages,
+        ))
+        print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
+        print(f"Chunks generados: {len(out.chunks)}")
+        for i, c in enumerate(out.chunks, start=1):
+            preview = c.text[:160].replace("\n", " ")
+            print(f"#{i:03d} pages={c.page_start}-{c.page_end} toks={c.token_count} "
+                  f"chars={c.char_start}-{c.char_end} id={c.chunk_id[:12]}  {preview}...")
+            
+    elif args.cmd == "chunk-global-md":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        chunker = chunker_global_md.GlobalTokenChunkerMd(
+            tokenizer,
+            chunker_global_md.GlobalChunkerConfigMd(
+                target_tokens=args.target,
+                overlap_tokens=args.overlap,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
+        normalizer = MdTextNormalizer()
+        uc = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
+        out = uc.execute(ExtractNormalizeChunkGlobalInput(
+            relative_path=Path(args.relative_path),
+            max_pages=args.max_pages,
+            generate_report=args.generate_report
         ))
         print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
         print(f"Chunks generados: {len(out.chunks)}")
@@ -160,7 +219,7 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        normalizer = TextNormalizer()
+        normalizer = MdTextNormalizer()
         chunker = chunker_global.GlobalTokenChunker(
             tokenizer,
             chunker_global.GlobalChunkerConfig(
@@ -203,11 +262,11 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        normalizer = TextNormalizer()
+        normalizer = MdTextNormalizer()
 
-        chunker = chunker_global.GlobalTokenChunker(
+        chunker = chunker_global_md.GlobalTokenChunkerMd(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            chunker_global_md.GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -247,10 +306,10 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        normalizer = TextNormalizer()
-        chunker = chunker_global.GlobalTokenChunker(
+        normalizer = MdTextNormalizer()
+        chunker = chunker_global_md.GlobalTokenChunkerMd(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            chunker_global_md.GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -265,7 +324,7 @@ def main():
             out = uc.execute(EmbedAndUpsertPdfInput(
                 relative_path=Path(args.relative_path),
                 max_pages=args.max_pages,
-                chunker_cfg=chunker_global.GlobalChunkerConfig(
+                chunker_cfg=chunker_global_md.GlobalChunkerConfigMd(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
@@ -279,6 +338,7 @@ def main():
                 ),
                 doc_id=args.doc_id,
                 company_id=getattr(args, 'company_id', 'default_company'),
+                generate_report=args.generate_report
             ))
 
             print(f"Archivo: {out.source_path}")
@@ -291,10 +351,10 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        normalizer = TextNormalizer()
-        chunker = chunker_global.GlobalTokenChunker(
+        normalizer = MdTextNormalizer()
+        chunker = chunker_global_md.GlobalTokenChunkerMd(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            chunker_global_md.GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -309,7 +369,7 @@ def main():
             out = uc.execute(EmbedAndUpsertCompanyPdfsInput(
                 company_id=args.company_id,
                 max_pages=args.max_pages,
-                chunker_cfg=chunker_global.GlobalChunkerConfig(
+                chunker_cfg=chunker_global_md.GlobalChunkerConfigMd(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
