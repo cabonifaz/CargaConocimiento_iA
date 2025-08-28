@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+import time
+import os
 
 from app.ports.outbound.blob_storage import BlobStoragePort
 from app.ports.outbound.text_extractor import TextExtractorPort
