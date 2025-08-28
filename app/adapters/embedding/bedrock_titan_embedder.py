@@ -2,6 +2,9 @@ from __future__ import annotations
 import json
 import time
 from typing import List, Optional
+from datetime import datetime
+import os
+from pathlib import Path
 
 import boto3
 from botocore.config import Config
@@ -54,6 +57,18 @@ class BedrockTitanEmbedder(EmbedderPort):
         self.total_tokens = 0
         self.total_cost = 0.0
         self.COST_PER_1M_TOKENS = 0.02  # $0.02 per 1M tokens for Titan Embeddings V2
+        
+        # Setup logging
+        self.logs_dir = Path("reports/embedding_costs")
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create log file with current date
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        self.log_file = self.logs_dir / f"embedding_costs_{current_date}.txt"
+        
+        # Initialize log file with header if it doesn't exist
+        if not self.log_file.exists():
+            self._write_log_header()
 
     # --------------- API ---------------
 
@@ -89,7 +104,10 @@ class BedrockTitanEmbedder(EmbedderPort):
                 vectors.append(vec)
                 print(f"-> {len(vectors)}/{len(texts)} embeddings procesados.", end='', flush=True)  # \033[2K limpia la línea
         
-        # Print final cost summary
+        # Print and log final cost summary
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Console output
         print(f"\n" + "=" * 60)
         print(f"📊 EMBEDDING COST SUMMARY")
         print(f"=" * 60)
@@ -100,6 +118,23 @@ class BedrockTitanEmbedder(EmbedderPort):
         print(f"Average Cost per Chunk: ${self.total_cost / len(texts):.8f}")
         print(f"Model: {self.model_id}")
         print(f"=" * 60)
+        
+        # File logging
+        summary = f"""
+{'=' * 80}
+📊 EMBEDDING BATCH SUMMARY - {timestamp}
+{'=' * 80}
+Total Chunks: {len(texts)}
+Total Tokens: {self.total_tokens:,}
+Total Cost: ${self.total_cost:.8f}
+Average Tokens per Chunk: {self.total_tokens / len(texts):.1f}
+Average Cost per Chunk: ${self.total_cost / len(texts):.8f}
+Model: {self.model_id}
+Region: {self.region}
+{'=' * 80}
+
+"""
+        self._log_to_file(summary)
         
         print("\n---")
         return vectors
@@ -123,14 +158,49 @@ class BedrockTitanEmbedder(EmbedderPort):
         """Calculate cost for given number of tokens."""
         return (tokens / 1_000_000) * self.COST_PER_1M_TOKENS
     
+    def _write_log_header(self):
+        """Write header to log file."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        header = f"""
+==========================================================================
+EMBEDDING COST LOG - {timestamp}
+Model: {self.model_id}
+Region: {self.region}
+Cost per 1M tokens: ${self.COST_PER_1M_TOKENS}
+==========================================================================
+
+"""
+        with open(self.log_file, 'w', encoding='utf-8') as f:
+            f.write(header)
+    
+    def _log_to_file(self, message: str):
+        """Append message to log file."""
+        with open(self.log_file, 'a', encoding='utf-8') as f:
+            f.write(message + '\n')
+    
     def _log_chunk_cost(self, chunk_idx: int, text: str, tokens: int, cost: float):
         """Log cost information for individual chunk."""
-        print(f"\n💰 CHUNK {chunk_idx + 1} COST:")
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        # Console output
+        console_msg = f"\n💰 CHUNK {chunk_idx + 1} COST:"
+        print(console_msg)
         print(f"   Tokens: {tokens:,}")
         print(f"   Cost: ${cost:.8f}")
         print(f"   Text length: {len(text)} chars")
         print(f"   Running total: {self.total_tokens:,} tokens, ${self.total_cost:.8f}")
         print("-" * 50)
+        
+        # File logging
+        file_msg = f"""[{timestamp}] CHUNK {chunk_idx + 1}:
+   Tokens: {tokens:,}
+   Cost: ${cost:.8f}
+   Text length: {len(text)} chars
+   Text preview: {text[:100]}{'...' if len(text) > 100 else ''}
+   Running total: {self.total_tokens:,} tokens, ${self.total_cost:.8f}
+{'-' * 80}"""
+        
+        self._log_to_file(file_msg)
 
     # --------------- Internos ---------------
 
