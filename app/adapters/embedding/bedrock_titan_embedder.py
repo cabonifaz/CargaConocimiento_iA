@@ -11,6 +11,14 @@ import pathlib
 from app.ports.outbound.embedder import EmbedderPort
 from app.config.settings import settings
 
+# Add tiktoken for token counting and cost calculation
+try:
+    import tiktoken
+    TIKTOKEN_AVAILABLE = True
+except ImportError:
+    TIKTOKEN_AVAILABLE = False
+    print("Warning: tiktoken not available, cost calculation will use character estimation")
+
 class BedrockTitanEmbedder(EmbedderPort):
     """Embedder para Amazon Titan Text Embeddings v2 en Bedrock.
     - Usa AWS_PROFILE si está definido en .env
@@ -41,6 +49,11 @@ class BedrockTitanEmbedder(EmbedderPort):
 
         cfg = Config(read_timeout=self.timeout_secs, retries={"max_attempts": 3, "mode": "standard"})
         self.client = session.client("bedrock-runtime", region_name=self.region, config=cfg)
+        
+        # Cost tracking
+        self.total_tokens = 0
+        self.total_cost = 0.0
+        self.COST_PER_1M_TOKENS = 0.02  # $0.02 per 1M tokens for Titan Embeddings V2
 
     # --------------- API ---------------
 
@@ -58,13 +71,66 @@ class BedrockTitanEmbedder(EmbedderPort):
             print(f"Procesando batch de {len(batch)} textos (total {len(texts)})...")
 
             # Titan embeddings procesa un texto por invocación -> llamamos por cada item del batch
-            for t in batch:
+            for idx, t in enumerate(batch):
+                # Calculate cost before embedding
+                tokens = self._estimate_tokens(t)
+                cost = self._calculate_cost(tokens)
+                
+                # Update running totals
+                self.total_tokens += tokens
+                self.total_cost += cost
+                
+                # Log cost per chunk
+                chunk_idx = i + idx  # Global chunk index
+                self._log_chunk_cost(chunk_idx, t, tokens, cost)
+                
                 vec = self._embed_one(t)
                 print(f"\r\033[2K- Vector recibido ({len(vec)} dims). ", end='', flush=True)  # \033[2K limpia la línea
                 vectors.append(vec)
                 print(f"-> {len(vectors)}/{len(texts)} embeddings procesados.", end='', flush=True)  # \033[2K limpia la línea
+        
+        # Print final cost summary
+        print(f"\n" + "=" * 60)
+        print(f"📊 EMBEDDING COST SUMMARY")
+        print(f"=" * 60)
+        print(f"Total Chunks: {len(texts)}")
+        print(f"Total Tokens: {self.total_tokens:,}")
+        print(f"Total Cost: ${self.total_cost:.8f}")
+        print(f"Average Tokens per Chunk: {self.total_tokens / len(texts):.1f}")
+        print(f"Average Cost per Chunk: ${self.total_cost / len(texts):.8f}")
+        print(f"Model: {self.model_id}")
+        print(f"=" * 60)
+        
         print("\n---")
         return vectors
+
+    # --------------- Cost Calculation ---------------
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count for text using tiktoken or fallback to character-based estimation."""
+        if TIKTOKEN_AVAILABLE:
+            try:
+                # Use cl100k_base (GPT-4) as approximation for Titan embeddings
+                encoding = tiktoken.get_encoding("cl100k_base")
+                return len(encoding.encode(text))
+            except Exception as e:
+                print(f"Warning: tiktoken failed ({e}), using character estimation")
+        
+        # Fallback: rough estimation (1 token ≈ 4 characters)
+        return max(1, len(text) // 4)
+    
+    def _calculate_cost(self, tokens: int) -> float:
+        """Calculate cost for given number of tokens."""
+        return (tokens / 1_000_000) * self.COST_PER_1M_TOKENS
+    
+    def _log_chunk_cost(self, chunk_idx: int, text: str, tokens: int, cost: float):
+        """Log cost information for individual chunk."""
+        print(f"\n💰 CHUNK {chunk_idx + 1} COST:")
+        print(f"   Tokens: {tokens:,}")
+        print(f"   Cost: ${cost:.8f}")
+        print(f"   Text length: {len(text)} chars")
+        print(f"   Running total: {self.total_tokens:,} tokens, ${self.total_cost:.8f}")
+        print("-" * 50)
 
     # --------------- Internos ---------------
 
