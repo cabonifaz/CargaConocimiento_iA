@@ -9,8 +9,9 @@ from app.ports.outbound.text_extractor import TextExtractorPort
 from app.ports.outbound.embedder import EmbedderPort
 from app.ports.outbound.vector_store import VectorStorePort
 
-from app.domain.services.text_normalizer import TextNormalizer
+from app.domain.services.md_text_normalizer import MdTextNormalizer
 from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig
+from app.domain.services.chunker_global_md import GlobalTokenChunkerMd, GlobalChunkerConfigMd
 from app.domain.services.chunk_quality import QualityConfig
 
 from app.application.use_cases.embed_chunks_from_pdf import (
@@ -29,7 +30,7 @@ class CompanyFileReport:
 class EmbedAndUpsertCompanyPdfsInput:
     company_id: str
     max_pages: Optional[int] = None
-    chunker_cfg: Optional[GlobalChunkerConfig] = None
+    chunker_cfg: Optional[GlobalChunkerConfigMd] = None
     quality_cfg: Optional[QualityConfig] = None
 
 @dataclass
@@ -45,8 +46,8 @@ class EmbedAndUpsertCompanyPdfs:
         self,
         blob: BlobStoragePort,
         extractor: TextExtractorPort,
-        normalizer: TextNormalizer,
-        chunker: GlobalTokenChunker,
+        normalizer: MdTextNormalizer,
+        chunker: GlobalTokenChunkerMd,
         embedder: EmbedderPort,
         vector_store: VectorStorePort,
     ) -> None:

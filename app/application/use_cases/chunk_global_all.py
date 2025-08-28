@@ -7,8 +7,9 @@ import json
 
 from app.ports.outbound.blob_storage import BlobStoragePort, FileInfo
 from app.ports.outbound.text_extractor import TextExtractorPort
-from app.domain.services.text_normalizer import TextNormalizer
+from app.domain.services.md_text_normalizer import MdTextNormalizer
 from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig, GlobalChunk
+from app.domain.services.chunker_global_md import GlobalTokenChunkerMd, GlobalChunkerConfigMd, GlobalChunkMd
 from app.domain.services.chunk_quality import ChunkQuality, QualityConfig
 from app.application.use_cases.extract_normalize_chunk_global_pdf import (
     ExtractNormalizeChunkGlobalPdf, ExtractNormalizeChunkGlobalInput
@@ -42,7 +43,7 @@ class ChunkGlobalAllOutput:
 
 class ChunkGlobalAll:
     def __init__(self, blob: BlobStoragePort, extractor: TextExtractorPort,
-                 normalizer: TextNormalizer, chunker: GlobalTokenChunker) -> None:
+                 normalizer: MdTextNormalizer, chunker: GlobalTokenChunker) -> None:
         self.blob = blob
         self.extract_normalize_chunk = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
 
@@ -66,7 +67,7 @@ class ChunkGlobalAll:
                     )
                 )
                 chunks = out.chunks
-                good = [c for c in chunks if quality.good(c)]  # filtro simple
+                good: List[GlobalChunk | GlobalChunkMd] = [c for c in chunks if quality.good(c)]  # filtro simple
 
                 toks = [c.token_count for c in good] or [0]
                 report = FileReport(
@@ -110,7 +111,9 @@ class ChunkGlobalAll:
 
         return ChunkGlobalAllOutput(reports=reports, report_path=report_path)
 
-    def _warnings(self, out, chunks: List[GlobalChunk], good: List[GlobalChunk]) -> List[str]:
+    from typing import List, Any
+
+    def _warnings(self, out, chunks: List[Any], good: List[Any]) -> List[str]:
         warns = []
         if out.page_count == 0:
             warns.append("extracción vacía")

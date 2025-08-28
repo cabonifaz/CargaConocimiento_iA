@@ -6,6 +6,7 @@ from typing import List, Optional
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError, BotoCoreError
+import pathlib
 
 from app.ports.outbound.embedder import EmbedderPort
 from app.config.settings import settings
@@ -45,6 +46,7 @@ class BedrockTitanEmbedder(EmbedderPort):
 
     def embed_texts(self, texts: List[str]) -> List[list[float]]:
         if not texts:
+            print("-------- NO TEXTS RECEIVED --------")
             return []
         
         print(f"### Bedrock Titan Embedder - embed_texts -> List[list[float]]")
