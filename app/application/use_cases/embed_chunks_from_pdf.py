@@ -71,7 +71,20 @@ class EmbedChunksFromPdf:
         # 3) embeddings (solo texto)
         texts = [c.text for c in good_global_chunks]
         print(f"--------- Texts: {len(texts)} ---------")
+        
+        # Start PDF tracking if embedder supports it
+        pdf_name = out.source_path.name
+        if hasattr(self.embedder, 'start_pdf_tracking'):
+            # Calculate PDF size (estimate from text length)
+            total_text_size = sum(len(text.encode('utf-8')) for text in texts)
+            pdf_size_mb = total_text_size / (1024 * 1024)
+            self.embedder.start_pdf_tracking(pdf_name, pdf_size_mb)
+        
         vectors = self.embedder.embed_texts(texts)
+        
+        # End PDF tracking
+        if hasattr(self.embedder, 'end_pdf_tracking'):
+            self.embedder.end_pdf_tracking(pdf_name, pdf_size_mb)
         
         print("### Embedding -----------")
         print(f"🟢 Embeddings generados: {len(vectors)} / {len(chunks)} chunks (de {out.page_count} páginas, {out.source_path})")
