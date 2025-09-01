@@ -28,6 +28,7 @@ from app.application.use_cases.embed_and_upsert_pdf import (
 from app.application.use_cases.embed_and_upsert_company_pdfs import (
     EmbedAndUpsertCompanyPdfs, EmbedAndUpsertCompanyPdfsInput
 )
+from app.domain.entities.area import Area
 
 from app.domain.services.text_normalizer import TextNormalizer
 from app.domain.services.md_text_normalizer import MdTextNormalizer

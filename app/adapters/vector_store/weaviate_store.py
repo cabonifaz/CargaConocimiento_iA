@@ -46,7 +46,7 @@ class WeaviateVectorStore(VectorStorePort):
         except Exception:
             pass
 
-    def upsert_chunks(self, doc_id: str, chunks: Sequence[GlobalChunk] | Sequence[GlobalChunkMd], vectors: List[list[float]], company_id: str = "default_company", collection_name: Optional[str] = None) -> int:
+    def upsert_chunks(self, doc_id: str, chunks: Sequence[GlobalChunk] | Sequence[GlobalChunkMd], vectors: List[list[float]], company_id: str = "default_company", area: str = "VENTAS", collection_name: Optional[str] = None) -> int:
         print(f"### Weaviate Vector Store - upsert_chunks -> int")
 
         if len(chunks) != len(vectors):
@@ -81,6 +81,7 @@ class WeaviateVectorStore(VectorStorePort):
             for c, vec in zip(batch_chunks, batch_vecs):
                 props = {
                     "company_id": company_id,
+                    "area": area,
                     "doc_id": doc_id,
                     "chunk_id": c.chunk_id,   # tu hash/64hex queda como propiedad (no como uuid)
                     "text": c.text,
@@ -135,6 +136,7 @@ class WeaviateVectorStore(VectorStorePort):
             ),
             properties=[
                 Property(name="company_id", data_type=DataType.TEXT, index_searchable=True),
+                Property(name="area", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="doc_id", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="chunk_id", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="text", data_type=DataType.TEXT, index_searchable=True),
