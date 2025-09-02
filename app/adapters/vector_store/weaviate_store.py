@@ -2,8 +2,7 @@ from typing import List, Optional
 from uuid import uuid5, NAMESPACE_URL
 from typing import Sequence
 
-from app.domain.services.chunker_global import GlobalChunk
-from app.domain.services.chunker_global_md import GlobalChunkMd
+from app.ports.outbound.chunker import ChunkType
 import weaviate
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 from weaviate.classes.config import Configure, Property, DataType, VectorDistances
@@ -46,7 +45,7 @@ class WeaviateVectorStore(VectorStorePort):
         except Exception:
             pass
 
-    def upsert_chunks(self, doc_id: str, chunks: Sequence[GlobalChunk] | Sequence[GlobalChunkMd], vectors: List[list[float]], company_id: str = "default_company", area: str = "VENTAS", collection_name: Optional[str] = None) -> int:
+    def upsert_chunks(self, doc_id: str, chunks: Sequence[ChunkType], vectors: List[list[float]], company_id: str = "default_company", area: str = "VENTAS", collection_name: Optional[str] = None) -> int:
         print(f"### Weaviate Vector Store - upsert_chunks -> int")
 
         if len(chunks) != len(vectors):

@@ -28,12 +28,11 @@ from app.application.use_cases.embed_and_upsert_pdf import (
 from app.application.use_cases.embed_and_upsert_company_pdfs import (
     EmbedAndUpsertCompanyPdfs, EmbedAndUpsertCompanyPdfsInput
 )
-from app.domain.entities.area import Area
-
-from app.domain.services.text_normalizer import TextNormalizer
 from app.domain.services.md_text_normalizer import MdTextNormalizer
-import app.domain.services.chunker_global as chunker_global
-import app.domain.services.chunker_global_md as chunker_global_md
+from app.domain.services.chunker_global import GlobalChunkerConfig
+from app.domain.services.chunker_global_md import GlobalChunkerConfigMd
+from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
+from app.adapters.chunker.chunk_global_md import ChunkGlobalMdAdapter
 from app.domain.services.chunk_quality import QualityConfig
 from app.config.settings import settings
 
@@ -167,9 +166,9 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = chunker_global.GlobalTokenChunker(
+        chunker = ChunkGlobalAdapter(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            GlobalChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -193,9 +192,9 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -221,9 +220,9 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        chunker = chunker_global.GlobalTokenChunker(
+        chunker = ChunkGlobalAdapter(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            GlobalChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -235,7 +234,7 @@ def main():
         out = uc.execute(ChunkGlobalAllInput(
             max_pages=args.max_pages,
             recursive=not args.non_recursive,
-            chunker_cfg=chunker_global.GlobalChunkerConfig(
+            chunker_cfg=GlobalChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -265,9 +264,9 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
 
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -281,7 +280,7 @@ def main():
         out = uc.execute(EmbedChunksFromPdfInput(
             relative_path=Path(args.relative_path),
             max_pages=args.max_pages,
-            chunker_cfg=chunker_global.GlobalChunkerConfig(
+            chunker_cfg=GlobalChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -308,9 +307,9 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -325,7 +324,7 @@ def main():
             out = uc.execute(EmbedAndUpsertPdfInput(
                 relative_path=Path(args.relative_path),
                 max_pages=args.max_pages,
-                chunker_cfg=chunker_global_md.GlobalChunkerConfigMd(
+                chunker_cfg=GlobalChunkerConfigMd(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
@@ -353,9 +352,9 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            GlobalChunkerConfigMd(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -370,7 +369,7 @@ def main():
             out = uc.execute(EmbedAndUpsertCompanyPdfsInput(
                 company_id=args.company_id,
                 max_pages=args.max_pages,
-                chunker_cfg=chunker_global_md.GlobalChunkerConfigMd(
+                chunker_cfg=GlobalChunkerConfigMd(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
