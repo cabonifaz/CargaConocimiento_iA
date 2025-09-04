@@ -1,9 +1,10 @@
 from __future__ import annotations
-from typing import List, Tuple
+from typing import List, Tuple, Union, Sequence
 
 from app.ports.outbound.chunker import ChunkerPort
 from app.ports.outbound.tokenizer import TokenCounterPort
 from app.domain.services.chunker_global_md import GlobalTokenChunkerMd, GlobalChunkerConfigMd, GlobalChunkMd
+from app.domain.services.chunker_global import GlobalChunk
 
 class ChunkGlobalMdAdapter(ChunkerPort):
     """Adapter for Markdown-aware global chunking strategy."""
@@ -12,7 +13,7 @@ class ChunkGlobalMdAdapter(ChunkerPort):
         """Initialize markdown-aware chunker with tokenizer and configuration."""
         self._chunker = GlobalTokenChunkerMd(tokenizer, cfg)
     
-    def chunk_document(self, pages: List[str]) -> Tuple[List[GlobalChunkMd], str]:
+    def chunk_document(self, pages: List[str]) -> Tuple[Sequence[GlobalChunkMd], str]:
         """Chunk a document into markdown-aware pieces.
         
         Args:
