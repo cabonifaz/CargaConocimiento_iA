@@ -9,8 +9,7 @@ from app.ports.outbound.blob_storage import BlobStoragePort, FileInfo
 from app.ports.outbound.text_extractor import TextExtractorPort
 from app.domain.services.md_text_normalizer import MdTextNormalizer
 from app.ports.outbound.chunker import ChunkerPort, ChunkerConfig, ChunkType
-from app.domain.services.chunker_global import GlobalChunkerConfig, GlobalChunk
-from app.domain.services.chunker_global_md import GlobalChunkerConfigMd, GlobalChunkMd
+from app.ports.outbound.chunker import ChunkerConfig, Chunk
 from app.domain.services.chunk_quality import ChunkQuality, QualityConfig
 from app.application.use_cases.extract_normalize_chunk_global_pdf import (
     ExtractNormalizeChunkGlobalPdf, ExtractNormalizeChunkGlobalInput

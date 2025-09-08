@@ -10,8 +10,7 @@ from app.ports.outbound.embedder import EmbedderPort
 
 from app.domain.services.md_text_normalizer import MdTextNormalizer
 from app.ports.outbound.chunker import ChunkerPort, ChunkerConfig, ChunkType
-from app.domain.services.chunker_global import GlobalChunk
-from app.domain.services.chunker_global_md import GlobalChunkMd
+from app.ports.outbound.chunker import Chunk
 from app.domain.services.chunk_quality import ChunkQuality, QualityConfig
 
 from app.application.use_cases.extract_normalize_chunk_global_pdf import (
@@ -65,8 +64,8 @@ class EmbedChunksFromPdf:
         good = [c for c in chunks if quality.good(c)]
         print("\n---")
 
-        # Usar todos los chunks buenos (ambos tipos: GlobalChunk y GlobalChunkMd)
-        good_global_chunks = [c for c in good if isinstance(c, (GlobalChunk, GlobalChunkMd))]
+        # Usar todos los chunks buenos
+        good_global_chunks = [c for c in good if isinstance(c, Chunk)]
 
         # 3) embeddings (solo texto)
         texts = [c.text for c in good_global_chunks]

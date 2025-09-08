@@ -2,8 +2,6 @@ from __future__ import annotations
 from typing import Protocol, List, Tuple, Union, Sequence
 from dataclasses import dataclass
 
-from app.domain.services.chunker_global import GlobalChunk, GlobalChunkerConfig
-from app.domain.services.chunker_global_md import GlobalChunkMd, GlobalChunkerConfigMd
 from app.ports.outbound.tokenizer import TokenCounterPort
 
 @dataclass(frozen=True)
@@ -16,7 +14,7 @@ class ChunkerConfig:
     page_separator: str = "\n\n\f\n\n"  # \f = form feed, útil como marcador
     
 @dataclass(frozen=True)
-class ChunkType:
+class Chunk:
     text: str
     token_count: int
     chunk_id: str
@@ -26,6 +24,9 @@ class ChunkType:
     # páginas 1-based que cubre este chunk (derivadas del mapa)
     page_start: int
     page_end: int
+    
+# Alias for backward compatibility during transition
+ChunkType = Chunk
 
 class ChunkerPort(Protocol):
     """Interface for document chunking strategies."""
@@ -34,7 +35,7 @@ class ChunkerPort(Protocol):
         """Initialize chunker with tokenizer and configuration."""
         ...
     
-    def chunk_document(self, pages: List[str]) -> Tuple[Sequence[ChunkType], str]:
+    def chunk_document(self, pages: List[str]) -> Tuple[Sequence[Chunk], str]:
         """Chunk a document into pieces.
         
         Args:

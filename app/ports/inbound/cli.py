@@ -29,8 +29,7 @@ from app.application.use_cases.embed_and_upsert_company_pdfs import (
     EmbedAndUpsertCompanyPdfs, EmbedAndUpsertCompanyPdfsInput
 )
 from app.domain.services.md_text_normalizer import MdTextNormalizer
-from app.domain.services.chunker_global import GlobalChunkerConfig
-from app.domain.services.chunker_global_md import GlobalChunkerConfigMd
+from app.ports.outbound.chunker import ChunkerConfig
 from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
 from app.adapters.chunker.chunk_global_md import ChunkGlobalMdAdapter
 from app.domain.services.chunk_quality import QualityConfig
@@ -168,7 +167,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         chunker = ChunkGlobalAdapter(
             tokenizer,
-            GlobalChunkerConfig(
+            ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -194,7 +193,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -222,7 +221,7 @@ def main():
         normalizer = MdTextNormalizer()
         chunker = ChunkGlobalAdapter(
             tokenizer,
-            GlobalChunkerConfig(
+            ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -234,7 +233,7 @@ def main():
         out = uc.execute(ChunkGlobalAllInput(
             max_pages=args.max_pages,
             recursive=not args.non_recursive,
-            chunker_cfg=GlobalChunkerConfig(
+            chunker_cfg=ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -266,7 +265,7 @@ def main():
 
         chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -280,7 +279,7 @@ def main():
         out = uc.execute(EmbedChunksFromPdfInput(
             relative_path=Path(args.relative_path),
             max_pages=args.max_pages,
-            chunker_cfg=GlobalChunkerConfig(
+            chunker_cfg=ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -309,7 +308,7 @@ def main():
         normalizer = MdTextNormalizer()
         chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -324,7 +323,7 @@ def main():
             out = uc.execute(EmbedAndUpsertPdfInput(
                 relative_path=Path(args.relative_path),
                 max_pages=args.max_pages,
-                chunker_cfg=GlobalChunkerConfigMd(
+                chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
@@ -354,7 +353,7 @@ def main():
         normalizer = MdTextNormalizer()
         chunker = ChunkGlobalMdAdapter(
             tokenizer,
-            GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -369,7 +368,7 @@ def main():
             out = uc.execute(EmbedAndUpsertCompanyPdfsInput(
                 company_id=args.company_id,
                 max_pages=args.max_pages,
-                chunker_cfg=GlobalChunkerConfigMd(
+                chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,

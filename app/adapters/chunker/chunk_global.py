@@ -3,22 +3,21 @@ from typing import List, Tuple, Union, Sequence
 import bisect
 import hashlib
 
-from app.ports.outbound.chunker import ChunkerPort
+from app.ports.outbound.chunker import ChunkerPort, Chunk, ChunkerConfig
 from app.ports.outbound.tokenizer import TokenCounterPort
-from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig, GlobalChunk
-from app.domain.services.chunker_global_md import GlobalChunkMd
-from app.ports.outbound.chunker import ChunkType, ChunkerConfig
 
-class ChunkGlobalAdapter(ChunkerPort):
-    """Adapter for basic global chunking strategy."""
-    
-    def __init__(self, tokenizer: TokenCounterPort, cfg: GlobalChunkerConfig | None = None) -> None:
-        """Initialize basic global chunker with tokenizer and configuration."""
+class GlobalTokenChunker:
+    """Chunking con ventana deslizante sobre TODO el documento unido.
+    Devuelve offsets de caracteres y páginas cubiertas por cada chunk.
+    """
+    def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
         self.tok = tokenizer
-        self.cfg = cfg or GlobalChunkerConfig()
+        self.cfg = cfg or ChunkerConfig()
         assert self.cfg.target_tokens > self.cfg.overlap_tokens >= 0, "Parámetros inválidos"
-    
-    def chunk_document(self, pages: List[str]) -> Tuple[List[ChunkType], str]:
+
+    # ---------- API principal ----------
+
+    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
         """Une las páginas, realiza chunking global y devuelve (chunks, full_text)."""
         print("### Global Token Chunker - Chunk document")
         full_text, page_offsets = self._join_pages_and_offsets(pages)
@@ -26,11 +25,9 @@ class ChunkGlobalAdapter(ChunkerPort):
         chunks = self._chunk_over_text(full_text, page_offsets)
         print(f"- Chunking global produjo {len(chunks)} chunks.\n---")
         return chunks, full_text
-    
-    def get_config(self) -> ChunkerConfig:
-        """Get the current chunker configuration."""
-        return self._chunker.cfg
-    
+
+    # ---------- Internos ----------
+
     def _join_pages_and_offsets(self, pages: List[str]) -> Tuple[str, List[int]]:
         """Une páginas con separador y devuelve:
         - full_text
@@ -50,7 +47,7 @@ class ChunkGlobalAdapter(ChunkerPort):
         full_text = "".join(parts)
         return full_text, offsets
 
-    def _chunk_over_text(self, text: str, page_offsets: List[int]) -> List[ChunkType]:
+    def _chunk_over_text(self, text: str, page_offsets: List[int]) -> List[Chunk]:
         tokens = self.tok.tokenize(text)
         n = len(tokens)
         if n == 0:
@@ -60,7 +57,7 @@ class ChunkGlobalAdapter(ChunkerPort):
         O = self.cfg.overlap_tokens
         stride = max(T - O, 1)
 
-        chunks: List[ChunkType] = []
+        chunks: List[Chunk] = []
         start_idx = 0
 
         while start_idx < n:
@@ -81,7 +78,7 @@ class ChunkGlobalAdapter(ChunkerPort):
                     new_page_start, new_page_end = self._pages_for_span(
                         page_offsets, start_char=last.char_start, end_char=char_end
                     )
-                    chunks[-1] = ChunkType(
+                    chunks[-1] = Chunk(
                         text=merged_text,
                         token_count=merged_tok_count,
                         chunk_id=self._hash(merged_text),
@@ -119,8 +116,8 @@ class ChunkGlobalAdapter(ChunkerPort):
         # 1-based
         return ps + 1, pe + 1
 
-    def _mk_global_chunk(self, text: str, tok_count: int, cs: int, ce: int, pstart: int, pend: int) -> ChunkType:
-        return ChunkType(
+    def _mk_global_chunk(self, text: str, tok_count: int, cs: int, ce: int, pstart: int, pend: int) -> Chunk:
+        return Chunk(
             text=text,
             token_count=tok_count,
             chunk_id=self._hash(text),
@@ -133,3 +130,22 @@ class ChunkGlobalAdapter(ChunkerPort):
     @staticmethod
     def _hash(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+class ChunkGlobalAdapter(ChunkerPort):
+    """Adapter for basic global chunking strategy."""
+    
+    def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
+        """Initialize basic global chunker with tokenizer and configuration."""
+        self._chunker = GlobalTokenChunker(tokenizer, cfg)
+    
+    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
+        """Une las páginas, realiza chunking global y devuelve (chunks, full_text)."""
+        global_chunks, full_text = self._chunker.chunk_document(pages)
+        chunks = global_chunks  # No need to convert anymore, they're already Chunk objects
+        return chunks, full_text
+    
+    def get_config(self) -> ChunkerConfig:
+        """Get the current chunker configuration."""
+        return self._chunker.cfg
+    
+    
