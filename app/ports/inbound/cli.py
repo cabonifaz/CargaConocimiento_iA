@@ -28,6 +28,9 @@ from app.application.use_cases.embed_and_upsert_pdf import (
 from app.application.use_cases.embed_and_upsert_company_pdfs import (
     EmbedAndUpsertCompanyPdfs, EmbedAndUpsertCompanyPdfsInput
 )
+from app.application.use_cases.embed_and_upsert_files_with_metadata import (
+    EmbedAndUpsertFilesWithMetadata, EmbedAndUpsertFilesWithMetadataInput
+)
 from app.domain.services.md_text_normalizer import MdTextNormalizer
 from app.ports.outbound.chunker import ChunkerConfig
 from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
@@ -144,6 +147,20 @@ def main():
     ewc.add_argument("--q-alpha-min", type=float, default=0.30)
     ewc.add_argument("--q-uniq-min", type=float, default=0.10)
     ewc.add_argument("--generate-report", action="store_true", help="Generar reportes de extracción, normalización y chunking")
+
+    # --- upsert-company-files (archivos de company_files/files/ con metadata personalizada) ---
+    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area personalizados")
+    ucf.add_argument("company_name", type=str, help="Nombre de la empresa (usado como company_id y nombre de colección)")
+    ucf.add_argument("area_name", type=str, help="Nombre del área (metadata area)")
+    ucf.add_argument("--max-pages", type=int, default=None)
+    ucf.add_argument("--target", type=int, default=512)
+    ucf.add_argument("--overlap", type=int, default=64)
+    ucf.add_argument("--min-toks", type=int, default=50)
+    ucf.add_argument("--sep", type=str, default="\n\n\f\n\n")
+    ucf.add_argument("--q-min-toks", type=int, default=50)
+    ucf.add_argument("--q-min-chars", type=int, default=200)
+    ucf.add_argument("--q-alpha-min", type=float, default=0.30)
+    ucf.add_argument("--q-uniq-min", type=float, default=0.10)
 
     # --- bedrock-check (sanity de conexión) ---
     br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
@@ -421,6 +438,56 @@ def main():
             print(f"Archivos procesados: {out.successful_files}/{out.total_files}")
             print(f"Total chunks escritos: {out.total_chunks_written}")
             print(f"Colección: {args.company_id}")
+            
+            for report in out.reports:
+                status = "✅" if report.success else "❌"
+                if report.success:
+                    print(f"{status} {report.file_path.name} -> {report.chunks_written} chunks (doc_id: {report.doc_id})")
+                else:
+                    print(f"{status} {report.file_path.name} -> Error: {report.error_message}")
+        finally:
+            store.close()
+
+    elif args.cmd == "upsert-company-files":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        normalizer = MdTextNormalizer()
+        # Use semantic chunker for better results  
+        chunker = ChunkSemanticAdapter(
+            tokenizer,
+            ChunkerConfig(
+                target_tokens=args.target,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
+        embedder = BedrockTitanEmbedder()
+        store = WeaviateVectorStore()
+
+        try:
+            uc = EmbedAndUpsertFilesWithMetadata(blob, extractor, normalizer, chunker, embedder, store)
+            out = uc.execute(EmbedAndUpsertFilesWithMetadataInput(
+                company_name=args.company_name,
+                area_name=args.area_name,
+                max_pages=args.max_pages,
+                chunker_cfg=ChunkerConfig(
+                    target_tokens=args.target,
+                    min_tokens=args.min_toks,
+                    page_separator=args.sep,
+                ),
+                quality_cfg=QualityConfig(
+                    min_tokens=args.q_min_toks,
+                    min_chars=args.q_min_chars,
+                    min_alpha_ratio=args.q_alpha_min,
+                    min_unique_ratio=args.q_uniq_min,
+                ),
+            ))
+
+            print(f"Company: {out.company_name} | Area: {out.area_name}")
+            print(f"Archivos procesados: {out.successful_files}/{out.total_files}")
+            print(f"Total chunks escritos: {out.total_chunks_written}")
+            print(f"Colección: {args.company_name}")
             
             for report in out.reports:
                 status = "✅" if report.success else "❌"
