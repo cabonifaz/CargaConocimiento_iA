@@ -406,7 +406,6 @@ def main():
                 max_pages=args.max_pages,
                 chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
-                    overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
                     page_separator=args.sep,
                 ),
