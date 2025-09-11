@@ -11,3 +11,4 @@ data/
 report/
 .vscode/
 reports/
+*.local.*
