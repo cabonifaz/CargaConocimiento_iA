@@ -41,7 +41,7 @@ class ExtractAndNormalizePdf:
 
     def execute(self, params: ExtractAndNormalizeInput) -> ExtractAndNormalizeOutput:
         if isinstance(self.normalizer, MdTextNormalizer):
-            print("----- Usando MdTextNormalizer -----")
+            print("📝 [NORMALIZACIÓN] Usando MdTextNormalizer para formato Markdown")
         # 1) extrae
         ext = self.extract_uc.execute(
             ExtractTextInput(relative_path=params.relative_path, max_pages=params.max_pages, generate_report=params.generate_report)

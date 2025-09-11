@@ -64,6 +64,9 @@ class BedrockTitanEmbedder(EmbedderPort):
         self.current_pdf_cost = 0.0
         self.current_pdf_chunks = 0
         
+        # Chunk-by-chunk data accumulation for final table
+        self.chunks_data = []
+        
         # Setup logging
         self.logs_dir = Path("reports/embedding_costs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -115,13 +118,16 @@ class BedrockTitanEmbedder(EmbedderPort):
                 chunk_end_time = time.time()
                 processing_time = chunk_end_time - chunk_start_time
                 
-                # Log cost per chunk with timing
+                # Accumulate chunk data for final table
                 chunk_idx = i + idx  # Global chunk index
-                self._log_chunk_cost(chunk_idx, t, tokens, cost, processing_time)
+                self._accumulate_chunk_data(chunk_idx, t, tokens, cost, processing_time)
                 
                 vectors.append(vec)
         
-        # Print and log final cost summary
+        # Print consolidated chunk table and summary
+        self._print_chunks_table()
+        
+        # Print final cost summary
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Console output
@@ -202,10 +208,9 @@ Cost per 1M tokens: ${self.COST_PER_1M_TOKENS}
         self.current_pdf_cost = 0.0
         self.current_pdf_chunks = 0
         
-        # Log PDF start
+        # Solo log a archivo, no a consola (ya se imprime en el nivel superior)
         timestamp = datetime.now().strftime("%H:%M:%S")
         msg = f"\n📄 STARTING PDF: {pdf_name} ({pdf_size_mb:.1f} MB) - {timestamp}"
-        print(msg)
         self._log_to_file(f"{msg}\n{'=' * 80}")
     
     def end_pdf_tracking(self, pdf_name: str, pdf_size_mb: float):
@@ -222,15 +227,8 @@ Cost per 1M tokens: ${self.COST_PER_1M_TOKENS}
         chunks_per_second = self.current_pdf_chunks / processing_time if processing_time > 0 else 0
         tokens_per_second = self.current_pdf_tokens / processing_time if processing_time > 0 else 0
         
-        # Console output
-        print(f"\n📊 PDF COMPLETED: {pdf_name}")
-        print(f"   File size: {pdf_size_mb:.1f} MB")
-        print(f"   Processing time: {processing_time:.1f}s")
-        print(f"   Chunks processed: {self.current_pdf_chunks}")
-        print(f"   Tokens: {self.current_pdf_tokens:,}")
-        print(f"   Cost: ${self.current_pdf_cost:.8f}")
-        print(f"   Speed: {mb_per_second:.2f} MB/s, {chunks_per_second:.1f} chunks/s, {tokens_per_second:.0f} tokens/s")
-        print("=" * 80)
+        # Solo resumen compacto en consola
+        print(f"⚡ [EMBEDDING] → Completado en {processing_time:.1f}s ({self.current_pdf_chunks} chunks, {tokens_per_second:.0f} tok/s)")
         
         # File logging
         summary = f"""
@@ -250,36 +248,118 @@ Processing speeds:
 """
         self._log_to_file(summary)
     
-    def _log_chunk_cost(self, chunk_idx: int, text: str, tokens: int, cost: float, processing_time: float):
-        """Log cost information for individual chunk with timing and size info."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+    def _accumulate_chunk_data(self, chunk_idx: int, text: str, tokens: int, cost: float, processing_time: float):
+        """Accumulate chunk data for final consolidated table."""
         text_size_kb = len(text.encode('utf-8')) / 1024  # Size in KB
         chars_per_second = len(text) / processing_time if processing_time > 0 else 0
         tokens_per_second = tokens / processing_time if processing_time > 0 else 0
         
-        # Console output
-        console_msg = f"\n💰 CHUNK {chunk_idx + 1} COST & PERFORMANCE:"
-        print(console_msg)
-        print(f"   Tokens: {tokens:,}")
-        print(f"   Cost: ${cost:.8f}")
-        print(f"   Text: {len(text)} chars ({text_size_kb:.1f} KB)")
-        print(f"   Time: {processing_time:.2f}s")
-        print(f"   Speed: {chars_per_second:.0f} chars/s, {tokens_per_second:.0f} tokens/s")
-        print(f"   Running total: {self.total_tokens:,} tokens, ${self.total_cost:.8f}")
-        print("-" * 55)
+        chunk_data = {
+            'chunk_id': chunk_idx + 1,
+            'tokens': tokens,
+            'cost': cost,
+            'text_preview': text[:50] + '...' if len(text) > 50 else text,
+            'text_length': len(text),
+            'text_size_kb': text_size_kb,
+            'processing_time': processing_time,
+            'chars_per_second': chars_per_second,
+            'tokens_per_second': tokens_per_second
+        }
         
-        # File logging
-        file_msg = f"""[{timestamp}] CHUNK {chunk_idx + 1}:
-   Tokens: {tokens:,}
-   Cost: ${cost:.8f}
-   Text length: {len(text)} chars ({text_size_kb:.1f} KB)
-   Processing time: {processing_time:.2f}s
-   Speed: {chars_per_second:.0f} chars/s, {tokens_per_second:.0f} tokens/s
-   Text preview: {text[:100]}{'...' if len(text) > 100 else ''}
-   Running total: {self.total_tokens:,} tokens, ${self.total_cost:.8f}
-{'-' * 80}"""
+        self.chunks_data.append(chunk_data)
         
-        self._log_to_file(file_msg)
+        # Progress indicator compacto para muchos chunks
+        if chunk_idx % 10 == 0 or chunk_idx < 5:  # Solo mostrar cada 10 chunks o los primeros 5
+            print(f"✓ Chunk {chunk_idx + 1} processed: {tokens:,} tokens, ${cost:.8f}, {processing_time:.2f}s")
+        elif (chunk_idx + 1) % 50 == 0:  # Resumen cada 50
+            print(f"✓ Processed {chunk_idx + 1} chunks...")
+    
+    def _print_chunks_table(self):
+        """Print consolidated table with all chunks data."""
+        if not self.chunks_data:
+            return
+            
+        print(f"\n" + "=" * 100)
+        print(f"📋 CHUNKS COST & PERFORMANCE TABLE")
+        print(f"=" * 100)
+        
+        # Table header with better spacing
+        header = f"{'ID':>3} │ {'Tokens':>7} │ {'Cost ($)':>10} │ {'Text Details':<20} │ {'Time':>6} │ {'Speed':>8}"
+        separator = f"{'─':─>3}─┼─{'─':─>7}─┼─{'─':─>10}─┼─{'─':─<20}─┼─{'─':─>6}─┼─{'─':─>8}─"
+        
+        print(header)
+        print(separator)
+        
+        # Table rows with better formatting
+        for chunk in self.chunks_data:
+            # Format text details with chars and KB info
+            text_details = f"{chunk['text_length']:,} chars ({chunk['text_size_kb']:.1f} KB)"
+            
+            # Format cost with fewer decimals for readability
+            cost_str = f"${chunk['cost']:.6f}" if chunk['cost'] >= 0.000001 else f"${chunk['cost']:.8f}"
+            
+            # Format speed
+            speed_str = f"{chunk['tokens_per_second']:.0f} t/s"
+            
+            row = (
+                f"{chunk['chunk_id']:>3} │ "
+                f"{chunk['tokens']:>7,} │ "
+                f"{cost_str:>10} │ "
+                f"{text_details:<20} │ "
+                f"{chunk['processing_time']:>6.2f} │ "
+                f"{speed_str:>8}"
+            )
+            print(row)
+        
+        print("=" * 100)
+        
+        # Calculate and show totals row
+        total_tokens = sum(chunk['tokens'] for chunk in self.chunks_data)
+        total_cost = sum(chunk['cost'] for chunk in self.chunks_data)
+        total_chars = sum(chunk['text_length'] for chunk in self.chunks_data)
+        total_kb = sum(chunk['text_size_kb'] for chunk in self.chunks_data)
+        avg_time = sum(chunk['processing_time'] for chunk in self.chunks_data) / len(self.chunks_data)
+        avg_speed = sum(chunk['tokens_per_second'] for chunk in self.chunks_data) / len(self.chunks_data)
+        
+        total_cost_str = f"${total_cost:.6f}" if total_cost >= 0.000001 else f"${total_cost:.8f}"
+        total_text_details = f"{total_chars:,} chars ({total_kb:.1f} KB)"
+        
+        totals_row = (
+            f"{'TOT':>3} │ "
+            f"{total_tokens:>7,} │ "
+            f"{total_cost_str:>10} │ "
+            f"{total_text_details:<20} │ "
+            f"{avg_time:>6.2f} │ "
+            f"{avg_speed:.0f} t/s"
+        )
+        print(totals_row)
+        print("=" * 100)
+        
+        # Log to file with same improved format
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        table_log = f"\n{'=' * 100}\n📋 CHUNKS TABLE - {timestamp}\n{'=' * 100}\n"
+        table_log += header + "\n" + separator + "\n"
+        
+        for chunk in self.chunks_data:
+            text_details = f"{chunk['text_length']:,} chars ({chunk['text_size_kb']:.1f} KB)"
+            
+            cost_str = f"${chunk['cost']:.6f}" if chunk['cost'] >= 0.000001 else f"${chunk['cost']:.8f}"
+            speed_str = f"{chunk['tokens_per_second']:.0f} t/s"
+            
+            row = (
+                f"{chunk['chunk_id']:>3} │ "
+                f"{chunk['tokens']:>7,} │ "
+                f"{cost_str:>10} │ "
+                f"{text_details:<20} │ "
+                f"{chunk['processing_time']:>6.2f} │ "
+                f"{speed_str:>8}"
+            )
+            table_log += row + "\n"
+        
+        table_log += "=" * 100 + "\n"
+        table_log += totals_row + "\n"
+        table_log += "=" * 100 + "\n\n"
+        self._log_to_file(table_log)
 
     # --------------- Internos ---------------
 

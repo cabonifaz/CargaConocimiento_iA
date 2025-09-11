@@ -64,10 +64,15 @@ class EmbedAndUpsertFilesWithMetadata:
         reports: List[FileWithMetadataReport] = []
         total_chunks = 0
         successful_count = 0
+        
+        print(f"\n{'=' * 80}")
+        print(f"🏢 PROCESANDO ARCHIVOS DE EMPRESA: {params.company_name} | ÁREA: {params.area_name}")
+        print(f"📂 Archivos encontrados: {len(pdf_files)}")
+        print(f"{'=' * 80}")
 
         for pdf_file in pdf_files:
             try:
-                print(f"🕑 Procesando archivo {pdf_file.name} para company_id={params.company_name} area={params.area_name}...")
+                print(f"\n📁 [PROCESANDO] {pdf_file.name} (empresa: {params.company_name}, área: {params.area_name})")
                 # Use relative path from company_files
                 relative_path = Path("files") / pdf_file.name
                 
@@ -100,7 +105,7 @@ class EmbedAndUpsertFilesWithMetadata:
                 total_chunks += written
                 successful_count += 1
 
-                print(f"✅ Procesamiento exitoso del archivo {pdf_file.name} -> {written} chunks escritos")
+                print(f"✅ [COMPLETADO] {pdf_file.name} → {written} chunks procesados y almacenados")
                 
             except Exception as e:
                 reports.append(FileWithMetadataReport(
@@ -110,7 +115,7 @@ class EmbedAndUpsertFilesWithMetadata:
                     doc_id="",
                     error_message=str(e),
                 ))
-                print(f"❌ Error procesando {pdf_file.name}: {str(e)}")
+                print(f"❌ [ERROR] {pdf_file.name} → {str(e)}")
 
         return EmbedAndUpsertFilesWithMetadataOutput(
             company_name=params.company_name,

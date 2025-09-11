@@ -17,16 +17,13 @@ class SemanticChunker:
     
     def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
         """Perform semantic chunking with 25% overlap on joined document."""
-        print("### Semantic Chunker - Chunk document with 25% overlap")
+        print("🧩 [CHUNKING] Método: Semántico con 25% overlap")
         full_text, page_offsets = self._join_pages_and_offsets(pages)
-        print(f"- Documento unido tiene {len(full_text)} chars y {len(page_offsets)} paginas.")
-        
-        # Parse Markdown blocks for semantic boundaries
+        # Parse Markdown blocks for semantic boundaries  
         md_blocks = self._parse_markdown_blocks(full_text)
-        print(f"- Identificados {len(md_blocks)} bloques semanticos")
         
         chunks = self._semantic_chunk_with_overlap(full_text, page_offsets, md_blocks)
-        print(f"- Chunking semantico produjo {len(chunks)} chunks con 25% overlap.\n---")
+        print(f"🧩 [CHUNKING] → {len(chunks)} chunks semánticos generados")
         return chunks, full_text
     
     def _join_pages_and_offsets(self, pages: List[str]) -> Tuple[str, List[int]]:

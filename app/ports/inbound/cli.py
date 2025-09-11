@@ -484,17 +484,30 @@ def main():
                 ),
             ))
 
-            print(f"Company: {out.company_name} | Area: {out.area_name}")
-            print(f"Archivos procesados: {out.successful_files}/{out.total_files}")
-            print(f"Total chunks escritos: {out.total_chunks_written}")
-            print(f"Colección: {args.company_name}")
+            print(f"\n{'=' * 80}")
+            print(f"📊 RESUMEN FINAL")
+            print(f"{'=' * 80}")
+            print(f"🏢 Empresa: {out.company_name} | 🏷️ Área: {out.area_name}")
+            print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
+            print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
+            print(f"🗃️ Colección: {args.company_name}")
+            print(f"{'=' * 80}")
             
-            for report in out.reports:
-                status = "✅" if report.success else "❌"
-                if report.success:
-                    print(f"{status} {report.file_path.name} -> {report.chunks_written} chunks (doc_id: {report.doc_id})")
-                else:
-                    print(f"{status} {report.file_path.name} -> Error: {report.error_message}")
+            # Solo mostrar errores si los hay, resumen de éxitos
+            errors = [r for r in out.reports if not r.success]
+            if errors:
+                print(f"❌ ERRORES ({len(errors)}):")
+                for report in errors:
+                    print(f"   • {report.file_path.name}: {report.error_message}")
+            
+            successes = [r for r in out.reports if r.success]
+            if successes and len(successes) <= 10:
+                print(f"✅ ARCHIVOS PROCESADOS:")
+                for report in successes:
+                    print(f"   • {report.file_path.name}: {report.chunks_written} chunks")
+            elif successes:
+                total_chunks_by_success = sum(r.chunks_written for r in successes)
+                print(f"✅ {len(successes)} archivos procesados exitosamente ({total_chunks_by_success} chunks totales)")
         finally:
             store.close()
             

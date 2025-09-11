@@ -46,11 +46,12 @@ class WeaviateVectorStore(VectorStorePort):
             pass
 
     def upsert_chunks(self, doc_id: str, chunks: Sequence[ChunkType], vectors: List[list[float]], company_id: str = "default_company", area: str = "VENTAS", collection_name: Optional[str] = None) -> int:
-        print(f"### Weaviate Vector Store - upsert_chunks -> int")
+        print(f"🗃️ [UPSERT] Iniciando upsert a Weaviate collection '{collection_name or self.collection_name}'")
 
         if len(chunks) != len(vectors):
             raise ValueError("chunks y vectors deben tener la misma longitud.")
         if not chunks:
+            print(f"🗃️ [UPSERT] → Sin datos para upsert (0 chunks)")
             return 0
 
         dim = len(vectors[0])
@@ -61,14 +62,12 @@ class WeaviateVectorStore(VectorStorePort):
         target_collection = collection_name or self.collection_name
         self._ensure_collection_exists(target_collection)
 
-        print(f"- Upsert de {len(chunks)} chunks en Weaviate collection '{target_collection}'...")
 
         coll = self.client.collections.get(target_collection)
 
         total = 0
         bs = self.batch_size
 
-        print(f"- Usando batch size {bs}, distancia '{self.distance}', dimensión {dim}.")
 
         for i in range(0, len(chunks), bs):
             batch_chunks = chunks[i:i+bs]
@@ -96,10 +95,8 @@ class WeaviateVectorStore(VectorStorePort):
                 id_map.append((props, vec, uid))
 
             try:
-                print(f"\r\033[2K- Upserting batch de {len(objs)} chunks... ", end='', flush=True)  # \033[2K limpia la línea
                 # intento rápido en batch
                 coll.data.insert_many(objs)
-                print(f"-> Upsert completado con éxito. ({len(objs)} items subidos).")
 
                 total += len(objs)
             except WeaviateBaseError:
@@ -111,7 +108,7 @@ class WeaviateVectorStore(VectorStorePort):
                         # si ya existe u otro conflicto, hacemos replace (sobrescribe todo)
                         coll.data.replace(uuid=uid, properties=props, vector=vec)
                     total += 1
-        print(f"- Upsert finalizado. Total chunks cargados: {total}.\n---")
+        print(f"🗃️ [UPSERT] → {total} chunks cargados exitosamente")
         return total
 
 

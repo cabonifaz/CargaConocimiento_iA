@@ -59,17 +59,17 @@ class EmbedChunksFromPdf:
 
         # 2) quality gate
         quality = ChunkQuality(params.quality_cfg) if params.quality_cfg else ChunkQuality()
-
-        print("### Chunk Quality - good -----------")
+        print(f"🔍 [QUALITY] Aplicando filtros de calidad a {len(chunks)} chunks")
         good = [c for c in chunks if quality.good(c)]
-        print("\n---")
+        rejected = len(chunks) - len(good)
+        print(f"🔍 [QUALITY] → {len(good)} chunks aprobados" + (f", {rejected} rechazados" if rejected > 0 else ""))
 
         # Usar todos los chunks buenos
         good_global_chunks = [c for c in good if isinstance(c, Chunk)]
 
         # 3) embeddings (solo texto)
         texts = [c.text for c in good_global_chunks]
-        print(f"--------- Texts: {len(texts)} ---------")
+        print(f"⚡ [EMBEDDING] Generando embeddings para {len(texts)} chunks")
         
         # Start PDF tracking
         pdf_name = out.source_path.name
@@ -82,9 +82,6 @@ class EmbedChunksFromPdf:
         
         # End PDF tracking
         self.embedder.end_pdf_tracking(pdf_name, pdf_size_mb)
-        
-        print("### Embedding -----------")
-        print(f"🟢 Embeddings generados: {len(vectors)} / {len(chunks)} chunks (de {out.page_count} páginas, {out.source_path})")
 
         if params.generate_report:
             path = Path(f"report/embedding/embeddings.json")
