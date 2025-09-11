@@ -23,6 +23,7 @@ from app.application.use_cases.embed_chunks_from_pdf import (
 @dataclass
 class CompanyFileReport:
     file_path: Path
+    area: str
     success: bool
     chunks_written: int
     doc_id: str
@@ -58,19 +59,19 @@ class EmbedAndUpsertCompanyPdfs:
         self.blob = blob
 
     def execute(self, params: EmbedAndUpsertCompanyPdfsInput) -> EmbedAndUpsertCompanyPdfsOutput:
-        # Get all PDFs from company subfolder
+        # Get all area subdirectories and their PDFs
         company_folder = Path("company_files") / params.company_id
-        pdf_files = self._get_pdf_files(company_folder)
+        area_pdf_files = self._get_area_pdf_files(company_folder)
         
         reports: List[CompanyFileReport] = []
         total_chunks = 0
         successful_count = 0
 
-        for pdf_file in pdf_files:
+        for area, pdf_file in area_pdf_files:
             try:
-                print(f"🕑 Procesando archivo {pdf_file.name}...")
-                # Use relative path from company_files
-                relative_path = Path(params.company_id) / pdf_file.name
+                print(f"🕑 Procesando archivo {pdf_file.name} del área {area}...")
+                # Use relative path from company_files including area
+                relative_path = Path(params.company_id) / area / pdf_file.name
                 
                 # First get embeddings
                 embed_result = self.embed_uc.execute(EmbedChunksFromPdfInput(
@@ -87,11 +88,13 @@ class EmbedAndUpsertCompanyPdfs:
                     chunks=embed_result.chunks,
                     vectors=embed_result.vectors,
                     company_id=params.company_id,
+                    area=area,
                     collection_name=params.company_id  # Use company_id as collection name
                 )
 
                 reports.append(CompanyFileReport(
                     file_path=pdf_file,
+                    area=area,
                     success=True,
                     chunks_written=written,
                     doc_id=doc_id,
@@ -100,11 +103,12 @@ class EmbedAndUpsertCompanyPdfs:
                 total_chunks += written
                 successful_count += 1
 
-                print(f"\n✅ Procesamiento exitoso del archivo {pdf_file.name}.\n\n---")
+                print(f"\n✅ Procesamiento exitoso del archivo {pdf_file.name} del área {area}.\n\n---")
                 
             except Exception as e:
                 reports.append(CompanyFileReport(
                     file_path=pdf_file,
+                    area=area,
                     success=False,
                     chunks_written=0,
                     doc_id="",
@@ -113,7 +117,7 @@ class EmbedAndUpsertCompanyPdfs:
 
         return EmbedAndUpsertCompanyPdfsOutput(
             company_id=params.company_id,
-            total_files=len(pdf_files),
+            total_files=len(area_pdf_files),
             successful_files=successful_count,
             total_chunks_written=total_chunks,
             reports=reports,
@@ -130,3 +134,25 @@ class EmbedAndUpsertCompanyPdfs:
                 pdf_files.append(file_path)
         
         return sorted(pdf_files)
+
+    def _get_area_pdf_files(self, company_folder: Path) -> List[tuple[str, Path]]:
+        """Get all PDF files from area subdirectories within the company folder.
+        
+        Returns:
+            List of tuples (area_name, pdf_file_path)
+        """
+        if not company_folder.exists():
+            return []
+        
+        area_pdf_files: List[tuple[str, Path]] = []
+        
+        # Iterate through subdirectories (areas)
+        for area_path in company_folder.iterdir():
+            if area_path.is_dir():
+                area_name = area_path.name
+                # Get all PDF files in this area directory
+                for pdf_file in area_path.iterdir():
+                    if pdf_file.is_file() and pdf_file.suffix.lower() == '.pdf':
+                        area_pdf_files.append((area_name, pdf_file))
+        
+        return sorted(area_pdf_files, key=lambda x: (x[0], x[1].name))
