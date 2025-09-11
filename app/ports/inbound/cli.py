@@ -28,12 +28,11 @@ from app.application.use_cases.embed_and_upsert_pdf import (
 from app.application.use_cases.embed_and_upsert_company_pdfs import (
     EmbedAndUpsertCompanyPdfs, EmbedAndUpsertCompanyPdfsInput
 )
-from app.domain.entities.area import Area
-
-from app.domain.services.text_normalizer import TextNormalizer
 from app.domain.services.md_text_normalizer import MdTextNormalizer
-import app.domain.services.chunker_global as chunker_global
-import app.domain.services.chunker_global_md as chunker_global_md
+from app.ports.outbound.chunker import ChunkerConfig
+from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
+from app.adapters.chunker.chunk_global_md import ChunkGlobalMdAdapter
+from app.adapters.chunker.chunk_semantic import ChunkSemanticAdapter
 from app.domain.services.chunk_quality import QualityConfig
 from app.config.settings import settings
 
@@ -76,6 +75,15 @@ def main():
     gchunkmd.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
     gchunkmd.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
     gchunkmd.add_argument("--generate-report", action="store_true", help="Generar reporte de extracción y normalización")
+    
+    # --- chunk-semantic (1 archivo) - NEW DEFAULT ---
+    gsem = sub.add_parser("chunk-semantic", help="Chunking SEMÁNTICO con 25% overlap (RECOMENDADO)")
+    gsem.add_argument("relative_path", type=str)
+    gsem.add_argument("--max-pages", type=int, default=None)
+    gsem.add_argument("--target", type=int, default=512, help="tokens por chunk")
+    gsem.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
+    gsem.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
+    gsem.add_argument("--generate-report", action="store_true", help="Generar reporte de extracción y normalización")
 
     # --- chunk-global-all (todos los PDFs + validación + reporte) ---
     gall = sub.add_parser("chunk-global-all", help="Chunking global + validación para TODOS los PDFs")
@@ -167,11 +175,11 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = chunker_global.GlobalTokenChunker(
+        # Use semantic chunker for better results
+        chunker = ChunkSemanticAdapter(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            ChunkerConfig(
                 target_tokens=args.target,
-                overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
                 page_separator=args.sep,
             ),
@@ -193,11 +201,11 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        # Use semantic chunker for better results  
+        chunker = ChunkSemanticAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
-                overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
                 page_separator=args.sep,
             ),
@@ -215,17 +223,43 @@ def main():
             preview = c.text[:160].replace("\n", " ")
             print(f"#{i:03d} pages={c.page_start}-{c.page_end} toks={c.token_count} "
                   f"chars={c.char_start}-{c.char_end} id={c.chunk_id[:12]}  {preview}...")
+            
+    elif args.cmd == "chunk-semantic":
+        blob = LocalFileSystemBlob()
+        extractor = PyMuPDFTextExtractor()
+        tokenizer = SimpleRegexTokenizer()
+        chunker = ChunkSemanticAdapter(
+            tokenizer,
+            ChunkerConfig(
+                target_tokens=args.target,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
+        normalizer = MdTextNormalizer()
+        uc = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
+        out = uc.execute(ExtractNormalizeChunkGlobalInput(
+            relative_path=Path(args.relative_path),
+            max_pages=args.max_pages,
+            generate_report=args.generate_report
+        ))
+        print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
+        print(f"Chunks SEMÁNTICOS generados: {len(out.chunks)} (con 25% overlap)")
+        for i, c in enumerate(out.chunks, start=1):
+            preview = c.text[:160].replace("\n", " ")
+            print(f"#{i:03d} pages={c.page_start}-{c.page_end} toks={c.token_count} "
+                  f"chars={c.char_start}-{c.char_end} id={c.chunk_id[:12]}  {preview}...")
 
     elif args.cmd == "chunk-global-all":
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        chunker = chunker_global.GlobalTokenChunker(
+        # Use semantic chunker for better results
+        chunker = ChunkSemanticAdapter(
             tokenizer,
-            chunker_global.GlobalChunkerConfig(
+            ChunkerConfig(
                 target_tokens=args.target,
-                overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
                 page_separator=args.sep,
             ),
@@ -235,7 +269,7 @@ def main():
         out = uc.execute(ChunkGlobalAllInput(
             max_pages=args.max_pages,
             recursive=not args.non_recursive,
-            chunker_cfg=chunker_global.GlobalChunkerConfig(
+            chunker_cfg=ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -265,11 +299,11 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
 
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        # Use semantic chunker for better results  
+        chunker = ChunkSemanticAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
-                overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
                 page_separator=args.sep,
             ),
@@ -281,7 +315,7 @@ def main():
         out = uc.execute(EmbedChunksFromPdfInput(
             relative_path=Path(args.relative_path),
             max_pages=args.max_pages,
-            chunker_cfg=chunker_global.GlobalChunkerConfig(
+            chunker_cfg=ChunkerConfig(
                 target_tokens=args.target,
                 overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
@@ -308,11 +342,11 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        # Use semantic chunker for better results  
+        chunker = ChunkSemanticAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
-                overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
                 page_separator=args.sep,
             ),
@@ -325,7 +359,7 @@ def main():
             out = uc.execute(EmbedAndUpsertPdfInput(
                 relative_path=Path(args.relative_path),
                 max_pages=args.max_pages,
-                chunker_cfg=chunker_global_md.GlobalChunkerConfigMd(
+                chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
                     overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
@@ -353,11 +387,11 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        chunker = chunker_global_md.GlobalTokenChunkerMd(
+        # Use semantic chunker for better results  
+        chunker = ChunkSemanticAdapter(
             tokenizer,
-            chunker_global_md.GlobalChunkerConfigMd(
+            ChunkerConfig(
                 target_tokens=args.target,
-                overlap_tokens=args.overlap,
                 min_tokens=args.min_toks,
                 page_separator=args.sep,
             ),
@@ -370,9 +404,8 @@ def main():
             out = uc.execute(EmbedAndUpsertCompanyPdfsInput(
                 company_id=args.company_id,
                 max_pages=args.max_pages,
-                chunker_cfg=chunker_global_md.GlobalChunkerConfigMd(
+                chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
-                    overlap_tokens=args.overlap,
                     min_tokens=args.min_toks,
                     page_separator=args.sep,
                 ),

@@ -1,46 +1,25 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Union, Sequence, Optional, Dict, Any
 import hashlib
 import bisect
 import re
 
+from app.ports.outbound.chunker import ChunkerPort, Chunk, ChunkerConfig
 from app.ports.outbound.tokenizer import TokenCounterPort
-
-@dataclass(frozen=True)
-class GlobalChunkerConfigMd:
-    target_tokens: int = 512
-    overlap_tokens: int = 64
-    min_tokens: int = 50
-    # Separador entre páginas en el texto unido (no es visible al usuario final).
-    # Usa algo poco probable en el contenido para que el mapeo sea estable.
-    page_separator: str = "\n\n\f\n\n"  # \f = form feed, útil como marcador
-
-@dataclass(frozen=True)
-class GlobalChunkMd:
-    text: str
-    token_count: int
-    chunk_id: str
-    # offsets en el texto UNIDO
-    char_start: int
-    char_end: int
-    # páginas 1-based que cubre este chunk (derivadas del mapa)
-    page_start: int
-    page_end: int
 
 class GlobalTokenChunkerMd:
     """Chunking con ventana deslizante sobre TODO el documento unido.
     Respeta límites semánticos Markdown (tablas, listas, headings, fences).
     Devuelve offsets de caracteres y páginas cubiertas por cada chunk.
     """
-    def __init__(self, tokenizer: TokenCounterPort, cfg: GlobalChunkerConfigMd | None = None) -> None:
+    def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
         self.tok = tokenizer
-        self.cfg = cfg or GlobalChunkerConfigMd()
+        self.cfg = cfg or ChunkerConfig()
         assert self.cfg.target_tokens > self.cfg.overlap_tokens >= 0, "Parámetros inválidos"
 
     # ---------- API principal ----------
 
-    def chunk_document(self, pages: List[str]) -> Tuple[List[GlobalChunkMd], str]:
+    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
         """Une las páginas, realiza chunking global y devuelve (chunks, full_text)."""
         print("### Global Token Chunker - Chunk document (Markdown-aware) --------------------------")
         full_text, page_offsets = self._join_pages_and_offsets(pages)
@@ -159,7 +138,7 @@ class GlobalTokenChunkerMd:
                     while j < n_lines and self._looks_table_row(line_at(j)) and line_at(j).strip() != "":
                         j += 1
                 else:
-                    # tolerante: grupo continuo de líneas con '|' (para tablas “simples” sin sep)
+                    # tolerante: grupo continuo de líneas con '|' (para tablas "simples" sin sep)
                     k = i
                     count_pipe = 0
                     while k < n_lines and self._looks_table_row(line_at(k)) and line_at(k).strip() != "":
@@ -296,81 +275,92 @@ class GlobalTokenChunkerMd:
         """
         Ajusta [start_char, end_char) a límites seguros de Markdown:
         - No cortar tablas ni fences; si interseca, intenta incluir el bloque completo
-          si cabe en tokens_window_limit; si no, corta antes del bloque.
+        si cabe en tokens_window_limit.
+        - Para tablas demasiado grandes, se permite dividir por filas (en lugar de descartarlas).
         - Prefiere cortar en líneas en blanco (entre párrafos).
         """
         s, e = start_char, end_char
         s, e = self._trim_span_to_non_ws(text, s, e)
 
-        # Si cae dentro de code/table, ajustar al bloque completo (o evitarlo)
+        # Si cae dentro de bloque crítico
         critical_types = ["code", "table"]
         for t in critical_types:
             b_s = self._find_block_covering(blocks, s, [t])
             b_e = self._find_block_covering(blocks, e - 1, [t]) if e > s else None
-            # Caso: start dentro de bloque crítico -> muévete al inicio del bloque
-            if b_s and b_s["type"] == t:
-                s = b_s["start"]
-            # Caso: end dentro de bloque crítico -> muévete al final del bloque
-            if b_e and b_e["type"] == t:
-                e = b_e["end"]
 
-            # Si el span interseca parcialmente un bloque crítico, intenta incluirlo completo si cabe
-            # De lo contrario, córtalo antes de empezar el bloque
-            # (Evaluamos sobre el último bloque encontrado para simplificar)
             blk = b_s or b_e
             if blk and blk["type"] == t:
                 candidate_s = min(s, blk["start"])
                 candidate_e = max(e, blk["end"])
-                # ¿cabe?
                 candidate_text = text[candidate_s:candidate_e]
-                if self.tok.count_tokens(candidate_text) <= tokens_window_limit:
+                token_count = self.tok.count_tokens(candidate_text)
+
+                if token_count <= tokens_window_limit:
+                    # ✅ El bloque completo cabe → usarlo entero
                     s, e = candidate_s, candidate_e
                 else:
-                    # Evita el bloque: corta justo antes si el bloque está hacia la derecha,
-                    # o después si está hacia la izquierda del inicio
-                    if blk["start"] >= s:
-                        e = min(e, blk["start"])
+                    if blk["type"] == "table":
+                        # 🔧 En lugar de descartar → cortar tabla por filas
+                        table_text = text[blk["start"]:blk["end"]]
+                        rows = table_text.splitlines()
+
+                        # buscar punto de corte dentro de la tabla
+                        running_tokens = 0
+                        cut_index = None
+                        for i, row in enumerate(rows):
+                            running_tokens += self.tok.count_tokens(row + "\n")
+                            if running_tokens > tokens_window_limit:
+                                cut_index = i
+                                break
+
+                        if cut_index is not None:
+                            # cortar tabla en dos partes
+                            part1 = "\n".join(rows[:cut_index])
+                            s = blk["start"]
+                            e = s + len(part1)
+                        else:
+                            # si aún así no encontramos corte, fallback: usar lo que quepa
+                            e = blk["start"] + len(table_text[:tokens_window_limit])
                     else:
-                        s = max(s, blk["end"])
+                        # para code blocks muy grandes → fallback original
+                        if blk["start"] >= s:
+                            e = min(e, blk["start"])
+                        else:
+                            s = max(s, blk["end"])
+
                 s, e = self._trim_span_to_non_ws(text, s, e)
 
         # Preferencias suaves: headings y listas al inicio de chunk si están cerca
         head_block = self._find_block_covering(blocks, s)
         if head_block and head_block["type"] in ("para", "other"):
-            # si hay un heading/list cercano a la derecha a <= 120 chars, alineamos inicio allí
             m = re.search(r"(^|\n)\s*(#{1,6}\s+\S|[-*+]\s+\S|\d+\.\s+\S)", text[s:e])
             if m and m.start() <= 120:
                 new_s = s + m.start()
-                # respeta límite de tokens
                 candidate_text = text[new_s:e]
                 if self.tok.count_tokens(candidate_text) <= tokens_window_limit:
                     s = new_s
 
-        # Cortes en líneas en blanco como fallback amable (sin romper límites)
-        # Empuja start a la derecha hasta una línea en blanco cercana si la hay y no se vuelve diminuto
+        # Cortes en líneas en blanco como fallback
         bl_right = self._nearest_blankline_right(text, s)
         if bl_right < e and (bl_right - s) <= 120:
             candidate_text = text[bl_right:e]
             if self.tok.count_tokens(candidate_text) >= max(10, self.cfg.min_tokens // 2):
                 s = bl_right
 
-        # Empuja end a la izquierda a una línea en blanco cercana si no volvemos el chunk muy corto
         bl_left = self._nearest_blankline_left(text, e)
         if bl_left > s and (e - bl_left) <= 120:
             candidate_text = text[s:bl_left]
             if self.tok.count_tokens(candidate_text) >= max(10, self.cfg.min_tokens // 2):
                 e = bl_left
 
-        # Recorte final de espacios
         s, e = self._trim_span_to_non_ws(text, s, e)
         if e <= s:
-            # evita spans vacíos
             e = min(len(text), s + 1)
         return s, e
 
     # ---------- Chunking principal con awareness de Markdown ----------
 
-    def _chunk_over_text(self, text: str, page_offsets: List[int]) -> List[GlobalChunkMd]:
+    def _chunk_over_text(self, text: str, page_offsets: List[int]) -> List[Chunk]:
         tokens = self.tok.tokenize(text)  # List[Tuple[char_start, char_end]]
         n = len(tokens)
         if n == 0:
@@ -383,7 +373,7 @@ class GlobalTokenChunkerMd:
         # Analiza estructura Markdown una sola vez
         md_blocks = self._build_md_blocks(text)
 
-        chunks: List[GlobalChunkMd] = []
+        chunks: List[Chunk] = []
         start_idx = 0
 
         while start_idx < n:
@@ -413,7 +403,7 @@ class GlobalTokenChunkerMd:
                     new_page_start, new_page_end = self._pages_for_span(
                         page_offsets, start_char=last.char_start, end_char=adj_end
                     )
-                    chunks[-1] = GlobalChunkMd(
+                    chunks[-1] = Chunk(
                         text=candidate_text,
                         token_count=candidate_tok_count,
                         chunk_id=self._hash(candidate_text),
@@ -454,8 +444,8 @@ class GlobalTokenChunkerMd:
         pe = max(pe, 0)
         return ps + 1, pe + 1
 
-    def _mk_global_chunk(self, text: str, tok_count: int, cs: int, ce: int, pstart: int, pend: int) -> GlobalChunkMd:
-        return GlobalChunkMd(
+    def _mk_global_chunk(self, text: str, tok_count: int, cs: int, ce: int, pstart: int, pend: int) -> Chunk:
+        return Chunk(
             text=text,
             token_count=tok_count,
             chunk_id=self._hash(text),
@@ -468,3 +458,28 @@ class GlobalTokenChunkerMd:
     @staticmethod
     def _hash(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+class ChunkGlobalMdAdapter(ChunkerPort):
+    """Adapter for Markdown-aware global chunking strategy."""
+    
+    def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
+        """Initialize markdown-aware chunker with tokenizer and configuration."""
+        self._chunker = GlobalTokenChunkerMd(tokenizer, cfg)
+    
+    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
+        """Chunk a document into markdown-aware pieces.
+        
+        Args:
+            pages: List of text pages to chunk
+            
+        Returns:
+            Tuple of (list of chunks, full_text)
+        """
+        global_chunks, full_text = self._chunker.chunk_document(pages)
+        chunks = global_chunks  # No need to convert anymore, they're already Chunk objects
+        return chunks, full_text
+    
+    def get_config(self) -> ChunkerConfig:
+        """Get the current chunker configuration."""
+        return self._chunker.cfg
+    

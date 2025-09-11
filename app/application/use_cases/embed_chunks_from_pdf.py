@@ -9,9 +9,8 @@ from app.ports.outbound.text_extractor import TextExtractorPort
 from app.ports.outbound.embedder import EmbedderPort
 
 from app.domain.services.md_text_normalizer import MdTextNormalizer
-from app.domain.services.text_normalizer import TextNormalizer
-from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig, GlobalChunk
-from app.domain.services.chunker_global_md import GlobalTokenChunkerMd, GlobalChunkerConfigMd, GlobalChunkMd
+from app.ports.outbound.chunker import ChunkerPort, ChunkerConfig, ChunkType
+from app.ports.outbound.chunker import Chunk
 from app.domain.services.chunk_quality import ChunkQuality, QualityConfig
 
 from app.application.use_cases.extract_normalize_chunk_global_pdf import (
@@ -22,7 +21,7 @@ from app.application.use_cases.extract_normalize_chunk_global_pdf import (
 class EmbedChunksFromPdfInput:
     relative_path: Path
     max_pages: Optional[int] = None
-    chunker_cfg: Optional[GlobalChunkerConfig | GlobalChunkerConfigMd] = None
+    chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
     batch_size: Optional[int] = None  # si quieres sobreescribir el batch local
     generate_report: Optional[bool] = False
@@ -33,7 +32,7 @@ class EmbedChunksFromPdfOutput:
     page_count: int
     used_text_count: int
     vectors: List[list[float]]
-    chunks: Sequence[GlobalChunk] | Sequence[GlobalChunkMd] # alineados con 'vectors'
+    chunks: Sequence[ChunkType] # alineados con 'vectors'
 
 class EmbedChunksFromPdf:
     """Orquesta del pipeline hasta obtener embeddings (sin upsert)."""
@@ -42,7 +41,7 @@ class EmbedChunksFromPdf:
         blob: BlobStoragePort,
         extractor: TextExtractorPort,
         normalizer: MdTextNormalizer,
-        chunker: GlobalTokenChunker | GlobalTokenChunkerMd,
+        chunker: ChunkerPort,
         embedder: EmbedderPort,
     ) -> None:
         self.extract_norm_chunk = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
@@ -65,26 +64,24 @@ class EmbedChunksFromPdf:
         good = [c for c in chunks if quality.good(c)]
         print("\n---")
 
-        # Filtrar solo instancias de GlobalChunk
-        good_global_chunks = [c for c in good if isinstance(c, GlobalChunkMd)]
+        # Usar todos los chunks buenos
+        good_global_chunks = [c for c in good if isinstance(c, Chunk)]
 
         # 3) embeddings (solo texto)
         texts = [c.text for c in good_global_chunks]
         print(f"--------- Texts: {len(texts)} ---------")
         
-        # Start PDF tracking if embedder supports it
+        # Start PDF tracking
         pdf_name = out.source_path.name
-        if hasattr(self.embedder, 'start_pdf_tracking'):
-            # Calculate PDF size (estimate from text length)
-            total_text_size = sum(len(text.encode('utf-8')) for text in texts)
-            pdf_size_mb = total_text_size / (1024 * 1024)
-            self.embedder.start_pdf_tracking(pdf_name, pdf_size_mb)
+        # Calculate PDF size (estimate from text length)
+        total_text_size = sum(len(text.encode('utf-8')) for text in texts)
+        pdf_size_mb = total_text_size / (1024 * 1024)
+        self.embedder.start_pdf_tracking(pdf_name, pdf_size_mb)
         
         vectors = self.embedder.embed_texts(texts)
         
         # End PDF tracking
-        if hasattr(self.embedder, 'end_pdf_tracking'):
-            self.embedder.end_pdf_tracking(pdf_name, pdf_size_mb)
+        self.embedder.end_pdf_tracking(pdf_name, pdf_size_mb)
         
         print("### Embedding -----------")
         print(f"🟢 Embeddings generados: {len(vectors)} / {len(chunks)} chunks (de {out.page_count} páginas, {out.source_path})")

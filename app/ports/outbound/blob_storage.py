@@ -10,6 +10,9 @@ class FileInfo:
     modified_at: datetime
 
 class BlobStoragePort(Protocol):
+    # Base directory for file operations
+    base_dir: Path
+    
     def list_pdfs(self, base_dir: Path, recursive: bool = True) -> Iterable[FileInfo]:
         ...
 

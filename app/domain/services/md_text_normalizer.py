@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 import pathlib
 import re
 import unicodedata
@@ -223,6 +224,16 @@ class MdTextNormalizer:
 
         print("---")
 
+        # Reporte de normalización
+        path = Path(f"report/normalization/md_text_normalizer_no_br.txt")
+        pathlib.Path(path.parent).mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for i, (orig, norm) in enumerate(zip(pages, norm_per_page)):
+                f.write(f"--- Página {i+1} ---\n")
+                f.write(f"Normalizada ({len(orig)} -> {len(norm)} chars):\n-----<INICIO>-----\n{norm}\n-----<FIN>-----\n")
+                f.write("\n\n")
+        print(f"🟢 Reporte de normalización guardado en {path.resolve()}")
+
         return norm_per_page
 
     def normalize_and_join(self, pages: List[str]) -> str:
@@ -379,8 +390,18 @@ class MdTextNormalizer:
         return t.strip()
 
     def _normalize_table_block(self, text: str) -> str:
-        # Respeta pipes y <br> en celdas; limpia trailing por línea
-        t = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
+        # Remove <br> tags from table cells and clean trailing spaces
+        t = text
+        
+        # Remove various forms of <br> tags
+        t = t.replace("<br />", " ").replace("<br/>", " ").replace("<br>", " ")
+        
+        # Clean up multiple spaces that might result from <br> removal
+        t = re.sub(r"[ \t]+", " ", t)
+        
+        # Clean trailing spaces per line
+        t = re.sub(r"[ \t]+$", "", t, flags=re.MULTILINE)
+        
         return t
 
     def _normalize_code_block(self, text: str) -> str:

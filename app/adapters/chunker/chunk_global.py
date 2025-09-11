@@ -1,44 +1,23 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Tuple
-import hashlib
+from typing import List, Tuple, Union, Sequence
 import bisect
+import hashlib
 
+from app.ports.outbound.chunker import ChunkerPort, Chunk, ChunkerConfig
 from app.ports.outbound.tokenizer import TokenCounterPort
-
-@dataclass(frozen=True)
-class GlobalChunkerConfig:
-    target_tokens: int = 512
-    overlap_tokens: int = 64
-    min_tokens: int = 50
-    # Separador entre páginas en el texto unido (no es visible al usuario final).
-    # Usa algo poco probable en el contenido para que el mapeo sea estable.
-    page_separator: str = "\n\n\f\n\n"  # \f = form feed, útil como marcador
-
-@dataclass(frozen=True)
-class GlobalChunk:
-    text: str
-    token_count: int
-    chunk_id: str
-    # offsets en el texto UNIDO
-    char_start: int
-    char_end: int
-    # páginas 1-based que cubre este chunk (derivadas del mapa)
-    page_start: int
-    page_end: int
 
 class GlobalTokenChunker:
     """Chunking con ventana deslizante sobre TODO el documento unido.
     Devuelve offsets de caracteres y páginas cubiertas por cada chunk.
     """
-    def __init__(self, tokenizer: TokenCounterPort, cfg: GlobalChunkerConfig | None = None) -> None:
+    def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
         self.tok = tokenizer
-        self.cfg = cfg or GlobalChunkerConfig()
+        self.cfg = cfg or ChunkerConfig()
         assert self.cfg.target_tokens > self.cfg.overlap_tokens >= 0, "Parámetros inválidos"
 
     # ---------- API principal ----------
 
-    def chunk_document(self, pages: List[str]) -> Tuple[List[GlobalChunk], str]:
+    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
         """Une las páginas, realiza chunking global y devuelve (chunks, full_text)."""
         print("### Global Token Chunker - Chunk document")
         full_text, page_offsets = self._join_pages_and_offsets(pages)
@@ -68,7 +47,7 @@ class GlobalTokenChunker:
         full_text = "".join(parts)
         return full_text, offsets
 
-    def _chunk_over_text(self, text: str, page_offsets: List[int]) -> List[GlobalChunk]:
+    def _chunk_over_text(self, text: str, page_offsets: List[int]) -> List[Chunk]:
         tokens = self.tok.tokenize(text)
         n = len(tokens)
         if n == 0:
@@ -78,7 +57,7 @@ class GlobalTokenChunker:
         O = self.cfg.overlap_tokens
         stride = max(T - O, 1)
 
-        chunks: List[GlobalChunk] = []
+        chunks: List[Chunk] = []
         start_idx = 0
 
         while start_idx < n:
@@ -99,7 +78,7 @@ class GlobalTokenChunker:
                     new_page_start, new_page_end = self._pages_for_span(
                         page_offsets, start_char=last.char_start, end_char=char_end
                     )
-                    chunks[-1] = GlobalChunk(
+                    chunks[-1] = Chunk(
                         text=merged_text,
                         token_count=merged_tok_count,
                         chunk_id=self._hash(merged_text),
@@ -137,8 +116,8 @@ class GlobalTokenChunker:
         # 1-based
         return ps + 1, pe + 1
 
-    def _mk_global_chunk(self, text: str, tok_count: int, cs: int, ce: int, pstart: int, pend: int) -> GlobalChunk:
-        return GlobalChunk(
+    def _mk_global_chunk(self, text: str, tok_count: int, cs: int, ce: int, pstart: int, pend: int) -> Chunk:
+        return Chunk(
             text=text,
             token_count=tok_count,
             chunk_id=self._hash(text),
@@ -151,3 +130,22 @@ class GlobalTokenChunker:
     @staticmethod
     def _hash(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+class ChunkGlobalAdapter(ChunkerPort):
+    """Adapter for basic global chunking strategy."""
+    
+    def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
+        """Initialize basic global chunker with tokenizer and configuration."""
+        self._chunker = GlobalTokenChunker(tokenizer, cfg)
+    
+    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
+        """Une las páginas, realiza chunking global y devuelve (chunks, full_text)."""
+        global_chunks, full_text = self._chunker.chunk_document(pages)
+        chunks = global_chunks  # No need to convert anymore, they're already Chunk objects
+        return chunks, full_text
+    
+    def get_config(self) -> ChunkerConfig:
+        """Get the current chunker configuration."""
+        return self._chunker.cfg
+    
+    

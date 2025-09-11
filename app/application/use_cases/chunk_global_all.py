@@ -8,8 +8,8 @@ import json
 from app.ports.outbound.blob_storage import BlobStoragePort, FileInfo
 from app.ports.outbound.text_extractor import TextExtractorPort
 from app.domain.services.md_text_normalizer import MdTextNormalizer
-from app.domain.services.chunker_global import GlobalTokenChunker, GlobalChunkerConfig, GlobalChunk
-from app.domain.services.chunker_global_md import GlobalTokenChunkerMd, GlobalChunkerConfigMd, GlobalChunkMd
+from app.ports.outbound.chunker import ChunkerPort, ChunkerConfig, ChunkType
+from app.ports.outbound.chunker import ChunkerConfig, Chunk
 from app.domain.services.chunk_quality import ChunkQuality, QualityConfig
 from app.application.use_cases.extract_normalize_chunk_global_pdf import (
     ExtractNormalizeChunkGlobalPdf, ExtractNormalizeChunkGlobalInput
@@ -20,7 +20,7 @@ from app.config.settings import settings
 class ChunkGlobalAllInput:
     max_pages: Optional[int] = None
     recursive: bool = True
-    chunker_cfg: Optional[GlobalChunkerConfig] = None
+    chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
     dry_run: bool = True  # por ahora solo pre-embedding
     report_jsonl: bool = True
@@ -43,13 +43,13 @@ class ChunkGlobalAllOutput:
 
 class ChunkGlobalAll:
     def __init__(self, blob: BlobStoragePort, extractor: TextExtractorPort,
-                 normalizer: MdTextNormalizer, chunker: GlobalTokenChunker) -> None:
+                 normalizer: MdTextNormalizer, chunker: ChunkerPort) -> None:
         self.blob = blob
         self.extract_normalize_chunk = ExtractNormalizeChunkGlobalPdf(blob, extractor, normalizer, chunker)
 
     def execute(self, params: ChunkGlobalAllInput) -> ChunkGlobalAllOutput:
         files: List[FileInfo] = list(self.blob.list_pdfs(
-            base_dir=getattr(self.blob, "base_dir"),
+            base_dir=self.blob.base_dir,
             recursive=params.recursive
         ))
 
@@ -67,7 +67,7 @@ class ChunkGlobalAll:
                     )
                 )
                 chunks = out.chunks
-                good: List[GlobalChunk | GlobalChunkMd] = [c for c in chunks if quality.good(c)]  # filtro simple
+                good: List[ChunkType] = [c for c in chunks if quality.good(c)]  # filtro simple
 
                 toks = [c.token_count for c in good] or [0]
                 report = FileReport(

@@ -10,7 +10,7 @@ from app.ports.outbound.embedder import EmbedderPort
 from app.ports.outbound.vector_store import VectorStorePort
 
 from app.domain.services.md_text_normalizer import MdTextNormalizer
-from app.domain.services.chunker_global_md import GlobalTokenChunkerMd, GlobalChunkerConfigMd
+from app.ports.outbound.chunker import ChunkerPort, ChunkerConfig
 from app.domain.services.chunk_quality import QualityConfig
 
 from app.application.use_cases.embed_chunks_from_pdf import (
@@ -21,7 +21,7 @@ from app.application.use_cases.embed_chunks_from_pdf import (
 class EmbedAndUpsertPdfInput:
     relative_path: Path
     max_pages: Optional[int] = None
-    chunker_cfg: Optional[GlobalChunkerConfigMd] = None
+    chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
     doc_id: Optional[str] = None  # si no viene, se usará el nombre de archivo (stem)
     company_id: str = "default_company"
@@ -41,7 +41,7 @@ class EmbedAndUpsertPdf:
         blob: BlobStoragePort,
         extractor: TextExtractorPort,
         normalizer: MdTextNormalizer,
-        chunker: GlobalTokenChunkerMd,
+        chunker: ChunkerPort,
         embedder: EmbedderPort,
         vector_store: VectorStorePort,
     ) -> None:
