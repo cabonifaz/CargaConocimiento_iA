@@ -3,25 +3,38 @@ from typing import List, Tuple, Dict, Any, Optional
 import re
 import bisect
 import hashlib
+from pathlib import Path
 
 from app.ports.outbound.chunker import ChunkerPort, Chunk, ChunkerConfig
 from app.ports.outbound.tokenizer import TokenCounterPort
 
 class SemanticChunker:
     """Semantic chunking with 25% overlap that respects Markdown structure boundaries."""
-    
+
     def __init__(self, tokenizer: TokenCounterPort, cfg: ChunkerConfig | None = None) -> None:
         self.tok = tokenizer
         self.cfg = cfg or ChunkerConfig()
         assert self.cfg.target_tokens > 0, "target_tokens must be > 0"
+
+        # Metadata context for chunks
+        self.current_filename: str = "documento.pdf"
+        self.current_document_title: str = "Documento"
+        self.section_hierarchy: List[str] = []
+        self.current_table_headers: List[str] = []
+        self.current_list_context: str = ""
     
-    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
+    def chunk_document(self, pages: List[str], filename: str = "documento.pdf", document_title: str = "Documento") -> Tuple[List[Chunk], str]:
         """Perform semantic chunking with 25% overlap on joined document."""
         print("🧩 [CHUNKING] Método: Semántico con 25% overlap")
+
+        # Set document context
+        self.current_filename = filename
+        self.current_document_title = document_title
+
         full_text, page_offsets = self._join_pages_and_offsets(pages)
-        # Parse Markdown blocks for semantic boundaries  
+        # Parse Markdown blocks for semantic boundaries and extract context
         md_blocks = self._parse_markdown_blocks(full_text)
-        
+
         chunks = self._semantic_chunk_with_overlap(full_text, page_offsets, md_blocks)
         print(f"🧩 [CHUNKING] → {len(chunks)} chunks semánticos generados")
         return chunks, full_text
@@ -42,11 +55,49 @@ class SemanticChunker:
         full_text = "".join(parts)
         return full_text, offsets
     
+    def _generate_metadata_header(self, block_context: Dict[str, Any], page_num: int) -> str:
+        """Generate contextual metadata header for chunk."""
+        # Build section hierarchy string
+        section_path = " > ".join(self.section_hierarchy) if self.section_hierarchy else "Documento principal"
+
+        # Determine content type
+        content_type = block_context.get('type', 'paragraph')
+        type_map = {
+            'heading': 'Título',
+            'paragraph': 'Párrafo',
+            'list': 'Lista',
+            'table': 'Tabla',
+            'code': 'Código',
+            'quote': 'Cita'
+        }
+        content_type_name = type_map.get(content_type, 'Texto')
+
+        # Add specific context for lists and tables
+        additional_context = ""
+        if content_type == 'list' and self.current_list_context:
+            additional_context = f"\nLista de: {self.current_list_context}"
+        elif content_type == 'table' and self.current_table_headers:
+            headers_str = ", ".join(self.current_table_headers)
+            additional_context = f"\nColumnas: {headers_str}"
+
+        metadata = f"""[[CONTEXTO]]
+Archivo: {self.current_filename}
+Documento: {self.current_document_title}
+Sección: {section_path}
+Tipo: {content_type_name}
+Página: {page_num}{additional_context}
+[[/CONTEXTO]]"""
+
+        return metadata
+
     def _parse_markdown_blocks(self, text: str) -> List[Dict[str, Any]]:
-        """Parse Markdown blocks for semantic boundaries."""
+        """Parse Markdown blocks for semantic boundaries and extract context."""
         lines = text.splitlines(keepends=True)
         blocks: List[Dict[str, Any]] = []
-        
+
+        # Reset section hierarchy
+        self.section_hierarchy = []
+
         # Track current position in text
         offset = 0
         i = 0
@@ -59,7 +110,21 @@ class SemanticChunker:
             block_start = offset
             block_lines = [line]
             block_type = self._classify_line(line_content)
-            
+
+            # Update section hierarchy for headings
+            if block_type == 'heading':
+                heading_level = self._get_heading_level(line_content)
+                heading_text = re.sub(r'^#{1,6}\s+', '', line_content).strip()
+
+                # Update hierarchy based on level
+                if heading_level <= len(self.section_hierarchy):
+                    # Replace or truncate hierarchy
+                    self.section_hierarchy = self.section_hierarchy[:heading_level-1]
+                    self.section_hierarchy.append(heading_text)
+                else:
+                    # Add to hierarchy
+                    self.section_hierarchy.append(heading_text)
+
             # For structured blocks, consume until boundary
             if block_type == 'heading':
                 # Headings are single-line
@@ -77,6 +142,12 @@ class SemanticChunker:
                             break
                         i += 1
             elif block_type in ['table', 'list', 'quote']:
+                # Extract context for tables and lists
+                if block_type == 'table':
+                    self._extract_table_headers(line_content)
+                elif block_type == 'list':
+                    self._extract_list_context(line_content)
+
                 # Structured blocks - consume while same type
                 i += 1
                 offset += len(line)
@@ -90,6 +161,11 @@ class SemanticChunker:
                         offset -= len(line)
                         break
                     block_lines.append(line)
+
+                    # Update context for additional table/list items
+                    if block_type == 'table' and '|' in line_content:
+                        self._extract_table_headers(line_content)
+
                     offset += len(line)
                     i += 1
             else:  # paragraph
@@ -128,7 +204,31 @@ class SemanticChunker:
             i += 1
         
         return blocks
-    
+
+    def _extract_table_headers(self, line: str) -> None:
+        """Extract table headers from first table row."""
+        if not self.current_table_headers and '|' in line:
+            # Clean up the line and extract headers
+            headers = [h.strip() for h in line.split('|')]
+            # Remove empty first/last elements from splitting
+            headers = [h for h in headers if h and not h.replace('-', '').strip() == '']
+            if headers:
+                self.current_table_headers = headers[:5]  # Limit to first 5 headers
+
+    def _extract_list_context(self, line: str) -> None:
+        """Extract context from list item to understand what the list is about."""
+        if not self.current_list_context:
+            # Try to infer list context from first item
+            clean_line = re.sub(r'^\s*[-*+]\s+', '', line.strip())
+            clean_line = re.sub(r'^\s*\d+\.\s+', '', clean_line)
+
+            # Extract key terms that might indicate list purpose
+            if len(clean_line) > 10:
+                # Take first meaningful words
+                words = clean_line.split()
+                if len(words) > 2:
+                    self.current_list_context = ' '.join(words[:3]) + "..."
+
     def _classify_line(self, line: str) -> str:
         """Classify a line into a Markdown block type."""
         line = line.strip()
@@ -202,23 +302,24 @@ class SemanticChunker:
                 # If merged chunk is reasonable size, update the last chunk
                 if merged_tokens <= target_tokens * 1.5:  # Allow some flexibility
                     page_start, page_end = self._pages_for_span(page_offsets, last_chunk.char_start, chunk_end)
-                    chunks[-1] = Chunk(
-                        text=merged_text.strip(),
-                        token_count=merged_tokens,
-                        chunk_id=self._hash(merged_text),
-                        char_start=last_chunk.char_start,
-                        char_end=chunk_end,
-                        page_start=page_start,
-                        page_end=page_end,
-                    )
+                    # Extract raw text from previous chunk (remove metadata)
+                    prev_raw_text = self._extract_content_from_chunk(last_chunk.text)
+                    merged_raw_text = prev_raw_text + "\n\n" + chunk_text
+
+                    # Find best block context for merged chunk
+                    merged_context = self._find_block_context_for_span(blocks, last_chunk.char_start, chunk_end)
+                    enhanced_merged = self._create_chunk(merged_raw_text, last_chunk.char_start, chunk_end, page_start, page_end, merged_context)
+                    chunks[-1] = enhanced_merged
                 else:
                     # Create separate chunk even if small
                     page_start, page_end = self._pages_for_span(page_offsets, chunk_start, chunk_end)
-                    chunks.append(self._create_chunk(chunk_text, chunk_start, chunk_end, page_start, page_end))
+                    block_context = self._find_block_context_for_span(blocks, chunk_start, chunk_end)
+                    chunks.append(self._create_chunk(chunk_text, chunk_start, chunk_end, page_start, page_end, block_context))
             else:
                 # Create normal chunk
                 page_start, page_end = self._pages_for_span(page_offsets, chunk_start, chunk_end)
-                chunks.append(self._create_chunk(chunk_text, chunk_start, chunk_end, page_start, page_end))
+                block_context = self._find_block_context_for_span(blocks, chunk_start, chunk_end)
+                chunks.append(self._create_chunk(chunk_text, chunk_start, chunk_end, page_start, page_end, block_context))
             
             # Calculate 25% overlap for next chunk
             if chunk_end >= len(text):
@@ -306,18 +407,53 @@ class SemanticChunker:
         pe = max(pe, 0)
         return ps + 1, pe + 1
     
-    def _create_chunk(self, text: str, char_start: int, char_end: int, page_start: int, page_end: int) -> Chunk:
-        """Create a Chunk object."""
+    def _create_chunk(self, text: str, char_start: int, char_end: int, page_start: int, page_end: int, block_context: Dict[str, Any] = None) -> Chunk:
+        """Create a Chunk object with contextual metadata."""
+        # Generate metadata header
+        context_info = block_context or {'type': 'paragraph'}
+        metadata_header = self._generate_metadata_header(context_info, page_start)
+
+        # Combine metadata with actual content
+        enhanced_text = f"{metadata_header}\n\n{text}"
+
         return Chunk(
-            text=text,
-            token_count=self.tok.count_tokens(text),
-            chunk_id=self._hash(text),
+            text=enhanced_text,
+            token_count=self.tok.count_tokens(enhanced_text),
+            chunk_id=self._hash(enhanced_text),
             char_start=char_start,
             char_end=char_end,
             page_start=page_start,
             page_end=page_end,
         )
-    
+
+    def _extract_content_from_chunk(self, chunk_text: str) -> str:
+        """Extract the actual content from a chunk, removing metadata header."""
+        if "[[/CONTEXTO]]" in chunk_text:
+            parts = chunk_text.split("[[/CONTEXTO]]", 1)
+            if len(parts) > 1:
+                return parts[1].strip()
+        return chunk_text
+
+    def _find_block_context_for_span(self, blocks: List[Dict[str, Any]], start_char: int, end_char: int) -> Dict[str, Any]:
+        """Find the most appropriate block context for a character span."""
+        # Find blocks that intersect with the span
+        intersecting_blocks = []
+        for block in blocks:
+            if (block['start'] < end_char and block['end'] > start_char):
+                intersecting_blocks.append(block)
+
+        if not intersecting_blocks:
+            return {'type': 'paragraph'}
+
+        # Prefer structured content over paragraphs
+        priority_order = ['heading', 'table', 'list', 'code', 'quote', 'paragraph']
+        for content_type in priority_order:
+            for block in intersecting_blocks:
+                if block['type'] == content_type:
+                    return block
+
+        return intersecting_blocks[0]
+
     @staticmethod
     def _hash(text: str) -> str:
         """Generate hash for chunk ID."""
@@ -331,9 +467,9 @@ class ChunkSemanticAdapter(ChunkerPort):
         """Initialize semantic chunker with tokenizer and configuration."""
         self._chunker = SemanticChunker(tokenizer, cfg)
     
-    def chunk_document(self, pages: List[str]) -> Tuple[List[Chunk], str]:
+    def chunk_document(self, pages: List[str], filename: str = "documento.pdf", document_title: str = "Documento") -> Tuple[List[Chunk], str]:
         """Chunk document using semantic boundaries with 25% overlap."""
-        return self._chunker.chunk_document(pages)
+        return self._chunker.chunk_document(pages, filename, document_title)
     
     def get_config(self) -> ChunkerConfig:
         """Get the current chunker configuration."""

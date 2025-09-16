@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List
+import re
 
 from app.ports.outbound.blob_storage import BlobStoragePort
 from app.ports.outbound.text_extractor import TextExtractorPort
@@ -55,9 +56,16 @@ class ExtractNormalizeChunkGlobalPdf:
         norm_pages = norm_result.normalized_pages or []
 
         # 3) chunking global
+        # Extract filename and try to get document title
+        filename = Path(params.relative_path).name
+        document_title = self._extract_document_title(norm_pages, filename)
+
         # Note: Configuration updates should be handled by the chunker adapter implementation
         # if needed. For now, we'll use the chunker as-is.
-        chunks, full_text = self.chunker.chunk_document(norm_pages)
+        if hasattr(self.chunker, 'chunk_document') and 'filename' in self.chunker.chunk_document.__code__.co_varnames:
+            chunks, full_text = self.chunker.chunk_document(norm_pages, filename, document_title)
+        else:
+            chunks, full_text = self.chunker.chunk_document(norm_pages)
 
         if params.generate_report:
             target = Path(params.relative_path)
@@ -81,3 +89,37 @@ class ExtractNormalizeChunkGlobalPdf:
             chunks=chunks,
             full_text=full_text,
         )
+
+    def _extract_document_title(self, pages: List[str], filename: str) -> str:
+        """Extract document title from content or use filename as fallback."""
+        if not pages:
+            return Path(filename).stem.replace('_', ' ').replace('-', ' ').title()
+
+        # Try to find title in first page
+        first_page = pages[0]
+        lines = first_page.split('\n')
+
+        for line in lines[:10]:  # Check first 10 lines
+            line = line.strip()
+            if not line:
+                continue
+
+            # Look for heading patterns
+            if re.match(r'^#{1,3}\s+', line):
+                title = re.sub(r'^#{1,3}\s+', '', line).strip()
+                if len(title) > 5 and len(title) < 100:
+                    return title
+
+            # Look for titles in ALL CAPS or Title Case
+            if (len(line) > 10 and len(line) < 100 and
+                (line.isupper() or line.istitle()) and
+                not line.startswith(('PÁGINA', 'PAGE', 'CAPÍTULO', 'CHAPTER'))):
+                return line
+
+            # Look for bold patterns **title**
+            bold_match = re.match(r'^\*\*(.+?)\*\*', line)
+            if bold_match and len(bold_match.group(1)) > 5:
+                return bold_match.group(1)
+
+        # Fallback to filename
+        return Path(filename).stem.replace('_', ' ').replace('-', ' ').title()
