@@ -1,5 +1,6 @@
 import json
 import logging
+import urllib.parse
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -32,7 +33,13 @@ class LambdaEntrypoint:
 
         for record in event.get('Records', []):
             bucket = record['s3']['bucket']['name']
-            key = record['s3']['object']['key']
+            key_encoded = record['s3']['object']['key']
+
+            # Decode URL-encoded key from S3 event
+            key = urllib.parse.unquote_plus(key_encoded)
+
+            logger.info(f"Processing file - Encoded key: {key_encoded}")
+            logger.info(f"Processing file - Decoded key: {key}")
 
             command = ProcessFileCommand(
                 bucket=bucket,
