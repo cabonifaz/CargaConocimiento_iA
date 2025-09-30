@@ -26,7 +26,7 @@ class SemanticChunker:
     
     def chunk_document(self, pages: List[str], filename: str = "documento.pdf", document_title: str = "Documento") -> Tuple[List[Chunk], str]:
         """Perform semantic chunking with 25% overlap on joined document."""
-        print("🧩 [CHUNKING] Método: Semántico con 25% overlap")
+        print("[CHUNKING] Método: Semántico con 25% overlap")
 
         # Set document context
         self.current_filename = filename
@@ -37,7 +37,7 @@ class SemanticChunker:
         md_blocks = self._parse_markdown_blocks(full_text)
 
         chunks = self._semantic_chunk_with_overlap(full_text, page_offsets, md_blocks)
-        print(f"🧩 [CHUNKING] → {len(chunks)} chunks semánticos generados")
+        print(f"[CHUNKING] -> {len(chunks)} chunks semánticos generados")
         return chunks, full_text
     
     def _join_pages_and_offsets(self, pages: List[str]) -> Tuple[str, List[int]]:
@@ -302,34 +302,22 @@ Página: {page_num}{additional_context}
         target_tokens = self.cfg.target_tokens
         min_tokens = self.cfg.min_tokens
 
-        # First, extract standalone table chunks
-        table_chunks = self._create_table_chunks(text, page_offsets, blocks)
-        chunks.extend(table_chunks)
+        # First, extract standalone JSON table chunks (adicionales)
+        json_table_chunks = self._create_json_table_chunks(text, page_offsets, blocks)
+        chunks.extend(json_table_chunks)
 
-        # Get positions already covered by table chunks
-        covered_ranges = [(chunk.char_start, chunk.char_end) for chunk in table_chunks]
+        # No excluir posiciones de tablas markdown de chunks normales
+        # Las tablas markdown seguirán siendo parte del texto normal
 
         # Start from beginning
         current_pos = 0
         
         while current_pos < len(text):
-            # Skip positions already covered by table chunks
-            if self._is_position_covered(current_pos, covered_ranges):
-                # Move to the end of the covered range
-                for start, end in covered_ranges:
-                    if start <= current_pos < end:
-                        current_pos = end
-                        break
-                continue
-
             # Find optimal chunk boundary starting from current_pos
             chunk_start = current_pos
             chunk_end, is_semantic_boundary = self._find_optimal_boundary(
                 text, blocks, chunk_start, target_tokens
             )
-
-            # Ensure chunk doesn't overlap with table chunks
-            chunk_end = self._adjust_end_for_tables(chunk_start, chunk_end, covered_ranges)
             
             # Extract chunk text
             chunk_text = text[chunk_start:chunk_end].strip()
@@ -384,12 +372,41 @@ Página: {page_num}{additional_context}
         
         return chunks
 
-    def _create_table_chunks(self, text: str, page_offsets: List[int], blocks: List[Dict[str, Any]]) -> List[Chunk]:
-        """Create dedicated chunks for JSON tables."""
+    def _create_json_table_chunks(self, text: str, page_offsets: List[int], blocks: List[Dict[str, Any]]) -> List[Chunk]:
+        """Create dedicated JSON chunks for all tables (both markdown and table_json)."""
         table_chunks = []
 
         for block in blocks:
-            if block['type'] == 'table_json':
+            if block['type'] == 'table':
+                # Reset headers for each table
+                self.current_table_headers = []
+
+                # Extract markdown table and convert to JSON
+                block_text = block['text']
+                self._extract_table_headers(block_text.split('\n')[0] if '\n' in block_text else block_text)
+
+                try:
+                    # Parse markdown table
+                    table_data = self._parse_markdown_table(block_text)
+                    json_content = self._table_to_json_string(table_data)
+
+                    # Create JSON chunk for this markdown table
+                    page_start, page_end = self._pages_for_span(page_offsets, block['start'], block['end'])
+                    block_context = {'type': 'table_json'}
+
+                    chunk = self._create_chunk(
+                        json_content,
+                        block['start'],
+                        block['end'],
+                        page_start,
+                        page_end,
+                        block_context
+                    )
+                    table_chunks.append(chunk)
+                except Exception as e:
+                    print(f"Error converting markdown table to JSON: {e}")
+
+            elif block['type'] == 'table_json':
                 # Reset headers for each table
                 self.current_table_headers = []
 
@@ -414,7 +431,7 @@ Página: {page_num}{additional_context}
                     json_content = '\n'.join(json_lines)
                     self._extract_json_table_headers(json_content)
 
-                # Create chunk for this table
+                # Create chunk for this JSON table
                 page_start, page_end = self._pages_for_span(page_offsets, block['start'], block['end'])
                 block_context = {'type': 'table_json'}
 
@@ -561,6 +578,107 @@ Página: {page_num}{additional_context}
                     return block
 
         return intersecting_blocks[0]
+
+    def _parse_markdown_table(self, table_text: str) -> Dict[str, Any]:
+        """
+        Parsea una tabla markdown y la convierte a estructura JSON.
+
+        Formato de entrada esperado:
+        | Header1 | Header2 | Header3 |
+        |---------|---------|---------|
+        | Cell1   | Cell2   | Cell3   |
+        | Cell4   | Cell5   | Cell6   |
+
+        Formato de salida:
+        {
+            "headers": ["Header1", "Header2", "Header3"],
+            "rows": [
+                ["Cell1", "Cell2", "Cell3"],
+                ["Cell4", "Cell5", "Cell6"]
+            ]
+        }
+        """
+        lines = [line.strip() for line in table_text.strip().splitlines() if line.strip()]
+
+        if len(lines) < 2:
+            return {"headers": [], "rows": []}
+
+        headers = []
+        rows = []
+        separator_found = False
+
+        for i, line in enumerate(lines):
+            # Verificar si es una línea de separación (|---|---|---|)
+            if re.match(r'^\s*\|[\s\-\|]+\|\s*$', line):
+                separator_found = True
+                continue
+
+            # Extraer celdas de la línea
+            cells = self._extract_table_cells(line)
+
+            if not cells:
+                continue
+
+            if i == 0:
+                # Primera línea = headers
+                headers = cells
+            elif separator_found:
+                # Líneas después del separador = datos
+                rows.append(cells)
+            elif i > 0:
+                # Si no hay separador pero hay más líneas, tratarlas como datos
+                rows.append(cells)
+
+        return {
+            "headers": headers,
+            "rows": rows
+        }
+
+    def _extract_table_cells(self, line: str) -> List[str]:
+        """
+        Extrae las celdas de una línea de tabla markdown.
+        Ejemplo: "| Cell1 | Cell2 | Cell3 |" -> ["Cell1", "Cell2", "Cell3"]
+        """
+        # Remover pipes del inicio y final
+        line = line.strip()
+        if line.startswith('|'):
+            line = line[1:]
+        if line.endswith('|'):
+            line = line[:-1]
+
+        # Dividir por pipes y limpiar espacios
+        cells = [cell.strip() for cell in line.split('|')]
+
+        # Filtrar celdas vacías al principio y final
+        while cells and not cells[0]:
+            cells.pop(0)
+        while cells and not cells[-1]:
+            cells.pop()
+
+        return cells
+
+    def _table_to_json_string(self, table_data: Dict[str, Any]) -> str:
+        """
+        Convierte la estructura de tabla a una representación JSON compacta.
+        """
+        if not table_data["headers"] and not table_data["rows"]:
+            return "```json\n{}\n```"
+
+        # Crear estructura más legible para el JSON
+        result = {
+            "table": {
+                "headers": table_data["headers"],
+                "rows": table_data["rows"],
+                "row_count": len(table_data["rows"]),
+                "column_count": len(table_data["headers"]) if table_data["headers"] else 0
+            }
+        }
+
+        # Formatear JSON compacto usando stringify
+        json_str = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
+
+        # Envolver en bloque de código para mejor visualización
+        return f"```json\n{json_str}\n```"
 
     @staticmethod
     def _hash(text: str) -> str:

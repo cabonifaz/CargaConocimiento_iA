@@ -235,7 +235,7 @@ class MdTextNormalizer:
                 f.write(f"--- Página {i+1} ---\n")
                 f.write(f"Normalizada ({len(orig)} -> {len(norm)} chars):\n-----<INICIO>-----\n{norm}\n-----<FIN>-----\n")
                 f.write("\n\n")
-        print(f"🟢 Reporte de normalización guardado en {path.resolve()}")
+        print(f"Reporte de normalización guardado en {path.resolve()}")
 
         return norm_per_page
 
@@ -475,7 +475,7 @@ class MdTextNormalizer:
 
     def _table_to_json_string(self, table_data: Dict[str, Any]) -> str:
         """
-        Convierte la estructura de tabla a una representación JSON legible.
+        Convierte la estructura de tabla a una representación JSON compacta.
         """
         if not table_data["headers"] and not table_data["rows"]:
             return "```json\n{}\n```"
@@ -490,8 +490,8 @@ class MdTextNormalizer:
             }
         }
 
-        # Formatear JSON con indentación legible
-        json_str = json.dumps(result, ensure_ascii=False, indent=2)
+        # Formatear JSON compacto usando stringify
+        json_str = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
 
         # Envolver en bloque de código para mejor visualización
         return f"```json\n{json_str}\n```"
@@ -647,7 +647,8 @@ class MdTextNormalizer:
 
     def _normalize_table_block(self, text: str) -> str:
         """
-        Convierte tablas markdown a formato JSON.
+        Normaliza tablas markdown manteniendo su formato original.
+        El JSON se genera por separado en el chunker.
         """
         # Primero hacer la limpieza básica
         t = text
@@ -664,15 +665,8 @@ class MdTextNormalizer:
         # Clean trailing spaces per line
         t = re.sub(r"[ \t]+$", "", t, flags=re.MULTILINE)
 
-        # Ahora convertir la tabla a JSON
-        try:
-            table_data = self._parse_markdown_table(t)
-            json_result = self._table_to_json_string(table_data)
-            return json_result
-        except Exception as e:
-            # Si hay error parseando, devolver el texto limpio original
-            print(f"Error parseando tabla a JSON: {e}")
-            return t
+        # Devolver la tabla markdown limpia (no convertir a JSON aquí)
+        return t
 
     def _normalize_code_block(self, text: str) -> str:
         # No tocar contenido de código
