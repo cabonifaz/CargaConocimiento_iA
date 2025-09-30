@@ -3,8 +3,9 @@ from pathlib import Path
 import pathlib
 import re
 import unicodedata
+import json
 from dataclasses import dataclass
-from typing import List, Tuple, Iterable
+from typing import List, Tuple, Iterable, Dict, Any
 
 # ===== Zero-width chars que conviene remover =====
 _ZW_CHARS = [
@@ -188,6 +189,7 @@ class MdNormalizerConfig:
     strip_bold_punctuation: bool = True       # convierte **,** -> ,
     strip_heading_bold: bool = True           # "# **Titulo**" -> "# Titulo"
     convert_bold_titles_to_headings: bool = True  # "**Titulo**" -> "# Titulo"
+    remove_replacement_chars: bool = True     # remueve caracteres � (U+FFFD)
     simplify_mailto_links: bool = True        # [email](mailto:email) -> email
 
 class MdTextNormalizer:
@@ -292,6 +294,9 @@ class MdTextNormalizer:
         # Control chars (excepto \n, \t)
         if self.cfg.strip_control_chars:
             t = re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]", "", t)
+        # Remover caracteres de reemplazo Unicode (�)
+        if self.cfg.remove_replacement_chars:
+            t = t.replace("\uFFFD", "")  # U+FFFD = �
         # Puntuación en negrita aislada (**,** -> ,)
         if self.cfg.strip_bold_punctuation:
             t = re.sub(r"\*\*([.,;:!?])\*\*", r"\1", t)
@@ -389,6 +394,107 @@ class MdTextNormalizer:
                 result_lines.append(after_text)
 
         return '\n'.join(result_lines)
+
+    def _parse_markdown_table(self, table_text: str) -> Dict[str, Any]:
+        """
+        Parsea una tabla markdown y la convierte a estructura JSON.
+
+        Formato de entrada esperado:
+        | Header1 | Header2 | Header3 |
+        |---------|---------|---------|
+        | Cell1   | Cell2   | Cell3   |
+        | Cell4   | Cell5   | Cell6   |
+
+        Formato de salida:
+        {
+            "headers": ["Header1", "Header2", "Header3"],
+            "rows": [
+                ["Cell1", "Cell2", "Cell3"],
+                ["Cell4", "Cell5", "Cell6"]
+            ]
+        }
+        """
+        lines = [line.strip() for line in table_text.strip().splitlines() if line.strip()]
+
+        if len(lines) < 2:
+            return {"headers": [], "rows": []}
+
+        headers = []
+        rows = []
+        separator_found = False
+
+        for i, line in enumerate(lines):
+            # Verificar si es una línea de separación (|---|---|---|)
+            if re.match(r'^\s*\|[\s\-\|]+\|\s*$', line):
+                separator_found = True
+                continue
+
+            # Extraer celdas de la línea
+            cells = self._extract_table_cells(line)
+
+            if not cells:
+                continue
+
+            if i == 0:
+                # Primera línea = headers
+                headers = cells
+            elif separator_found:
+                # Líneas después del separador = datos
+                rows.append(cells)
+            elif i > 0:
+                # Si no hay separador pero hay más líneas, tratarlas como datos
+                rows.append(cells)
+
+        return {
+            "headers": headers,
+            "rows": rows
+        }
+
+    def _extract_table_cells(self, line: str) -> List[str]:
+        """
+        Extrae las celdas de una línea de tabla markdown.
+        Ejemplo: "| Cell1 | Cell2 | Cell3 |" -> ["Cell1", "Cell2", "Cell3"]
+        """
+        # Remover pipes del inicio y final
+        line = line.strip()
+        if line.startswith('|'):
+            line = line[1:]
+        if line.endswith('|'):
+            line = line[:-1]
+
+        # Dividir por pipes y limpiar espacios
+        cells = [cell.strip() for cell in line.split('|')]
+
+        # Filtrar celdas vacías al principio y final
+        while cells and not cells[0]:
+            cells.pop(0)
+        while cells and not cells[-1]:
+            cells.pop()
+
+        return cells
+
+    def _table_to_json_string(self, table_data: Dict[str, Any]) -> str:
+        """
+        Convierte la estructura de tabla a una representación JSON legible.
+        """
+        if not table_data["headers"] and not table_data["rows"]:
+            return "```json\n{}\n```"
+
+        # Crear estructura más legible para el JSON
+        result = {
+            "table": {
+                "headers": table_data["headers"],
+                "rows": table_data["rows"],
+                "row_count": len(table_data["rows"]),
+                "column_count": len(table_data["headers"]) if table_data["headers"] else 0
+            }
+        }
+
+        # Formatear JSON con indentación legible
+        json_str = json.dumps(result, ensure_ascii=False, indent=2)
+
+        # Envolver en bloque de código para mejor visualización
+        return f"```json\n{json_str}\n```"
 
     def _is_bold_title_paragraph(self, text: str) -> bool:
         """
@@ -540,7 +646,10 @@ class MdTextNormalizer:
         return t.strip()
 
     def _normalize_table_block(self, text: str) -> str:
-        # Remove <br> tags from table cells and clean trailing spaces
+        """
+        Convierte tablas markdown a formato JSON.
+        """
+        # Primero hacer la limpieza básica
         t = text
 
         # Remove various forms of <br> tags
@@ -555,7 +664,15 @@ class MdTextNormalizer:
         # Clean trailing spaces per line
         t = re.sub(r"[ \t]+$", "", t, flags=re.MULTILINE)
 
-        return t
+        # Ahora convertir la tabla a JSON
+        try:
+            table_data = self._parse_markdown_table(t)
+            json_result = self._table_to_json_string(table_data)
+            return json_result
+        except Exception as e:
+            # Si hay error parseando, devolver el texto limpio original
+            print(f"Error parseando tabla a JSON: {e}")
+            return t
 
     def _normalize_code_block(self, text: str) -> str:
         # No tocar contenido de código
