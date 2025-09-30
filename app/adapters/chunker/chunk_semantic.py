@@ -3,6 +3,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import re
 import bisect
 import hashlib
+import json
 from pathlib import Path
 
 from app.ports.outbound.chunker import ChunkerPort, Chunk, ChunkerConfig
@@ -67,6 +68,7 @@ class SemanticChunker:
             'paragraph': 'Párrafo',
             'list': 'Lista',
             'table': 'Tabla',
+            'table_json': 'Tabla',
             'code': 'Código',
             'quote': 'Cita'
         }
@@ -76,7 +78,7 @@ class SemanticChunker:
         additional_context = ""
         if content_type == 'list' and self.current_list_context:
             additional_context = f"\nLista de: {self.current_list_context}"
-        elif content_type == 'table' and self.current_table_headers:
+        elif content_type in ['table', 'table_json'] and self.current_table_headers:
             headers_str = ", ".join(self.current_table_headers)
             additional_context = f"\nColumnas: {headers_str}"
 
@@ -129,18 +131,26 @@ Página: {page_num}{additional_context}
             if block_type == 'heading':
                 # Headings are single-line
                 pass
-            elif block_type == 'code':
+            elif block_type in ['code', 'table_json']:
                 # Code fence - consume until closing fence
                 if line_content.strip().startswith('```'):
+                    json_content_lines = []
                     i += 1
                     offset += len(line)
                     while i < len(lines):
                         line = lines[i]
                         block_lines.append(line)
+                        if not line.rstrip('\r\n').strip().startswith('```'):
+                            json_content_lines.append(line.rstrip('\r\n'))
                         offset += len(line)
                         if line.rstrip('\r\n').strip().startswith('```'):
                             break
                         i += 1
+
+                    # If it's a JSON table, extract headers
+                    if block_type == 'table_json' and json_content_lines:
+                        json_content = '\n'.join(json_content_lines)
+                        self._extract_json_table_headers(json_content)
             elif block_type in ['table', 'list', 'quote']:
                 # Extract context for tables and lists
                 if block_type == 'table':
@@ -215,6 +225,21 @@ Página: {page_num}{additional_context}
             if headers:
                 self.current_table_headers = headers[:5]  # Limit to first 5 headers
 
+    def _extract_json_table_headers(self, json_content: str) -> None:
+        """Extract table headers from JSON table content."""
+        try:
+            # Parse the JSON content
+            data = json.loads(json_content)
+
+            # Navigate to the table structure
+            if 'table' in data and 'headers' in data['table']:
+                headers = data['table']['headers']
+                if isinstance(headers, list) and headers:
+                    self.current_table_headers = headers[:5]  # Limit to first 5 headers
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # If JSON parsing fails, leave headers empty
+            pass
+
     def _extract_list_context(self, line: str) -> None:
         """Extract context from list item to understand what the list is about."""
         if not self.current_list_context:
@@ -232,32 +257,35 @@ Página: {page_num}{additional_context}
     def _classify_line(self, line: str) -> str:
         """Classify a line into a Markdown block type."""
         line = line.strip()
-        
+
         if not line:
             return 'paragraph'
-        
+
         # Heading
         if re.match(r'^#{1,6}\s+', line):
             return 'heading'
-        
-        # Code fence
+
+        # Code fence - check if it's a JSON table
         if line.startswith('```'):
+            # Check if it's specifically a JSON table
+            if line == '```json':
+                return 'table_json'
             return 'code'
-        
-        # Table row
+
+        # Traditional table row
         if line.startswith('|') and line.endswith('|'):
             return 'table'
         if '|' in line and line.count('|') >= 2:
             return 'table'
-        
+
         # List item
         if re.match(r'^\s*[-*+]\s+', line) or re.match(r'^\s*\d+\.\s+', line):
             return 'list'
-        
+
         # Quote
         if line.startswith('>'):
             return 'quote'
-        
+
         return 'paragraph'
     
     def _get_heading_level(self, line: str) -> int:
@@ -269,20 +297,39 @@ Página: {page_num}{additional_context}
         """Create semantic chunks with 25% overlap."""
         if not text.strip():
             return []
-        
+
         chunks: List[Chunk] = []
         target_tokens = self.cfg.target_tokens
         min_tokens = self.cfg.min_tokens
-        
+
+        # First, extract standalone table chunks
+        table_chunks = self._create_table_chunks(text, page_offsets, blocks)
+        chunks.extend(table_chunks)
+
+        # Get positions already covered by table chunks
+        covered_ranges = [(chunk.char_start, chunk.char_end) for chunk in table_chunks]
+
         # Start from beginning
         current_pos = 0
         
         while current_pos < len(text):
+            # Skip positions already covered by table chunks
+            if self._is_position_covered(current_pos, covered_ranges):
+                # Move to the end of the covered range
+                for start, end in covered_ranges:
+                    if start <= current_pos < end:
+                        current_pos = end
+                        break
+                continue
+
             # Find optimal chunk boundary starting from current_pos
             chunk_start = current_pos
             chunk_end, is_semantic_boundary = self._find_optimal_boundary(
                 text, blocks, chunk_start, target_tokens
             )
+
+            # Ensure chunk doesn't overlap with table chunks
+            chunk_end = self._adjust_end_for_tables(chunk_start, chunk_end, covered_ranges)
             
             # Extract chunk text
             chunk_text = text[chunk_start:chunk_end].strip()
@@ -336,7 +383,68 @@ Página: {page_num}{additional_context}
             current_pos = overlap_start
         
         return chunks
-    
+
+    def _create_table_chunks(self, text: str, page_offsets: List[int], blocks: List[Dict[str, Any]]) -> List[Chunk]:
+        """Create dedicated chunks for JSON tables."""
+        table_chunks = []
+
+        for block in blocks:
+            if block['type'] == 'table_json':
+                # Reset headers for each table
+                self.current_table_headers = []
+
+                # Extract the JSON content from the block
+                block_text = block['text']
+
+                # Extract JSON content from the code block
+                lines = block_text.strip().split('\n')
+                json_lines = []
+                in_json = False
+
+                for line in lines:
+                    if line.strip() == '```json':
+                        in_json = True
+                        continue
+                    elif line.strip() == '```':
+                        break
+                    elif in_json:
+                        json_lines.append(line)
+
+                if json_lines:
+                    json_content = '\n'.join(json_lines)
+                    self._extract_json_table_headers(json_content)
+
+                # Create chunk for this table
+                page_start, page_end = self._pages_for_span(page_offsets, block['start'], block['end'])
+                block_context = {'type': 'table_json'}
+
+                chunk = self._create_chunk(
+                    block_text.strip(),
+                    block['start'],
+                    block['end'],
+                    page_start,
+                    page_end,
+                    block_context
+                )
+                table_chunks.append(chunk)
+
+        return table_chunks
+
+    def _is_position_covered(self, pos: int, covered_ranges: List[Tuple[int, int]]) -> bool:
+        """Check if a position is already covered by existing chunks."""
+        for start, end in covered_ranges:
+            if start <= pos < end:
+                return True
+        return False
+
+    def _adjust_end_for_tables(self, start: int, end: int, covered_ranges: List[Tuple[int, int]]) -> int:
+        """Adjust chunk end to avoid overlapping with table chunks."""
+        for table_start, table_end in covered_ranges:
+            # If chunk would overlap with a table, cut it short
+            if start < table_start < end:
+                return table_start
+        return end
+
     def _find_optimal_boundary(self, text: str, blocks: List[Dict[str, Any]], start_pos: int, target_tokens: int) -> Tuple[int, bool]:
         """Find optimal chunk boundary respecting semantic structure."""
         # Start with token-based boundary
@@ -365,7 +473,7 @@ Página: {page_num}{additional_context}
         # If no heading found, look for end of structured blocks
         if not is_semantic:
             for block in blocks:
-                if (block['type'] in ['table', 'list', 'code', 'quote'] and 
+                if (block['type'] in ['table', 'table_json', 'list', 'code', 'quote'] and
                     block['end'] <= target_end + target_tokens and block['end'] >= start_pos):
                     boundary_tokens = self.tok.count_tokens(text[start_pos:block['end']])
                     if boundary_tokens >= target_tokens * 0.6:  # At least 60% of target
@@ -446,7 +554,7 @@ Página: {page_num}{additional_context}
             return {'type': 'paragraph'}
 
         # Prefer structured content over paragraphs
-        priority_order = ['heading', 'table', 'list', 'code', 'quote', 'paragraph']
+        priority_order = ['heading', 'table', 'table_json', 'list', 'code', 'quote', 'paragraph']
         for content_type in priority_order:
             for block in intersecting_blocks:
                 if block['type'] == content_type:
