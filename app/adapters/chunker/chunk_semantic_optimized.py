@@ -351,19 +351,20 @@ class SemanticChunkerOptimized:
 
                     chunk_text = f"{hierarchy_header}\n{json_content}" if hierarchy_header else json_content
 
-                    # Validate character limit
-                    chunk_text = self._validate_and_fix_chunk_length(chunk_text)
+                    # Split if exceeds character limit
+                    text_fragments = self._split_oversized_chunk(chunk_text)
 
-                    chunk = Chunk(
-                        text=chunk_text,
-                        token_count=self.tok.count_tokens(chunk_text),
-                        chunk_id=self._hash(chunk_text),
-                        char_start=block['start'],
-                        char_end=block['end'],
-                        page_start=page_start,
-                        page_end=page_end,
-                    )
-                    table_chunks.append(chunk)
+                    for i, fragment in enumerate(text_fragments):
+                        chunk = Chunk(
+                            text=fragment,
+                            token_count=self.tok.count_tokens(fragment),
+                            chunk_id=self._hash(f"{fragment}_{i}"),  # Unique ID for each fragment
+                            char_start=block['start'],
+                            char_end=block['end'],
+                            page_start=page_start,
+                            page_end=page_end,
+                        )
+                        table_chunks.append(chunk)
 
                 except Exception as e:
                     print(f"Error processing table: {e}")
@@ -395,26 +396,27 @@ class SemanticChunkerOptimized:
             # Create enhanced text with hierarchy
             enhanced_text = f"{hierarchy_header}\n{chunk_text}" if hierarchy_header else chunk_text
 
-            # Validate character limit
-            enhanced_text = self._validate_and_fix_chunk_length(enhanced_text)
+            # Split if exceeds character limit
+            text_fragments = self._split_oversized_chunk(enhanced_text)
 
-            token_count = self.tok.count_tokens(enhanced_text)
+            for i, fragment in enumerate(text_fragments):
+                token_count = self.tok.count_tokens(fragment)
 
-            # Handle small chunks by merging with previous
-            if token_count < min_tokens and chunks:
-                self._try_merge_with_previous(chunks, enhanced_text, chunk_start, chunk_end, page_offsets)
-            else:
-                page_start, page_end = self._get_pages_for_span(page_offsets, chunk_start, chunk_end)
-                chunk = Chunk(
-                    text=enhanced_text,
-                    token_count=token_count,
-                    chunk_id=self._hash(enhanced_text),
-                    char_start=chunk_start,
-                    char_end=chunk_end,
-                    page_start=page_start,
-                    page_end=page_end,
-                )
-                chunks.append(chunk)
+                # Handle small chunks by merging with previous (only for first fragment to avoid complexity)
+                if i == 0 and token_count < min_tokens and chunks:
+                    self._try_merge_with_previous(chunks, fragment, chunk_start, chunk_end, page_offsets)
+                else:
+                    page_start, page_end = self._get_pages_for_span(page_offsets, chunk_start, chunk_end)
+                    chunk = Chunk(
+                        text=fragment,
+                        token_count=token_count,
+                        chunk_id=self._hash(f"{fragment}_{i}"),
+                        char_start=chunk_start,
+                        char_end=chunk_end,
+                        page_start=page_start,
+                        page_end=page_end,
+                    )
+                    chunks.append(chunk)
 
             # Calculate 15% overlap for next chunk
             if chunk_end >= len(text):
@@ -496,8 +498,21 @@ class SemanticChunkerOptimized:
         last_chunk = chunks[-1]
         merged_text = last_chunk.text + "\n\n" + new_text
 
-        # Validate character limit for merged text
-        merged_text = self._validate_and_fix_chunk_length(merged_text)
+        # Check if merged text exceeds character limit
+        if len(merged_text) > self.max_chars:
+            # If merge would exceed limit, just add as separate chunk
+            page_start, page_end = self._get_pages_for_span(page_offsets, start_char, end_char)
+            new_chunk = Chunk(
+                text=new_text,
+                token_count=self.tok.count_tokens(new_text),
+                chunk_id=self._hash(new_text),
+                char_start=start_char,
+                char_end=end_char,
+                page_start=page_start,
+                page_end=page_end,
+            )
+            chunks.append(new_chunk)
+            return
 
         merged_tokens = self.tok.count_tokens(merged_text)
 
@@ -523,26 +538,41 @@ class SemanticChunkerOptimized:
         pe = max(pe, 0)
         return ps + 1, pe + 1
 
-    def _validate_and_fix_chunk_length(self, chunk_text: str) -> str:
-        """Validate chunk doesn't exceed character limit and truncate if needed."""
+    def _split_oversized_chunk(self, chunk_text: str) -> List[str]:
+        """Split chunks that exceed character limit into multiple valid chunks."""
         if len(chunk_text) <= self.max_chars:
-            return chunk_text
+            return [chunk_text]
 
-        print(f"[WARNING] Chunk excede límite de caracteres ({len(chunk_text)} > {self.max_chars}), truncando...")
+        print(f"[WARNING] Chunk excede límite de caracteres ({len(chunk_text)} > {self.max_chars}), dividiendo en múltiples chunks...")
 
-        # Truncate to max_chars, trying to break at word boundary
-        truncated = chunk_text[:self.max_chars]
+        chunks = []
+        pos = 0
 
-        # Try to find last word boundary to avoid cutting words
-        last_space = truncated.rfind(' ')
-        last_newline = truncated.rfind('\n')
+        while pos < len(chunk_text):
+            end_pos = min(pos + self.max_chars, len(chunk_text))
 
-        # Use the latest word boundary found
-        boundary = max(last_space, last_newline)
-        if boundary > self.max_chars * 0.9:  # Only if we don't lose too much content
-            truncated = truncated[:boundary]
+            # If not the last fragment, find word boundary
+            if end_pos < len(chunk_text):
+                # Look for the last space or newline within 80% of max_chars to avoid tiny fragments
+                min_boundary = pos + int(self.max_chars * 0.8)
+                last_space = chunk_text.rfind(' ', min_boundary, end_pos)
+                last_newline = chunk_text.rfind('\n', min_boundary, end_pos)
 
-        return truncated
+                boundary = max(last_space, last_newline)
+                if boundary > min_boundary:
+                    end_pos = boundary
+
+            chunk_part = chunk_text[pos:end_pos].strip()
+            if chunk_part:
+                chunks.append(chunk_part)
+
+            pos = end_pos
+            # Skip whitespace to avoid starting next chunk with spaces
+            while pos < len(chunk_text) and chunk_text[pos].isspace():
+                pos += 1
+
+        print(f"[INFO] Chunk dividido en {len(chunks)} fragmentos válidos")
+        return chunks
 
     @staticmethod
     def _hash(text: str) -> str:
