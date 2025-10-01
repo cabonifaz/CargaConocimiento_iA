@@ -130,22 +130,55 @@ class WeaviateVectorStore(VectorStorePort):
                 name="default",
                 vector_index_config=Configure.VectorIndex.hnsw(distance_metric=metric),
             ),
+            inverted_index_config=Configure.inverted_index(
+                bm25_k1=1.3,
+                bm25_b=0.75,
+            ),
             properties=[
-                # Metadata fields - optimized for filtering and search
-                Property(name="company_id", data_type=DataType.TEXT, index_searchable=True),
-                Property(name="area", data_type=DataType.TEXT, index_searchable=True),
-                Property(name="doc_id", data_type=DataType.TEXT, index_searchable=True),
-                Property(name="chunk_id", data_type=DataType.TEXT, index_searchable=False),  # Used for dedup, not search
 
-                # Main content - fully indexed for vector + BM25 hybrid search
-                Property(name="text", data_type=DataType.TEXT, index_searchable=True),
+                # ==== Texto para búsqueda semántica/híbrida ====
+                Property(name="text", data_type=DataType.TEXT,
+                        index_searchable=True, index_filterable=False),
+                Property(name="bm25_text", data_type=DataType.TEXT,
+                        index_searchable=True, index_filterable=False),
+                Property(name="doc_title", data_type=DataType.TEXT,
+                        index_searchable=True, index_filterable=True),
+                Property(name="section_title", data_type=DataType.TEXT,
+                        index_searchable=True, index_filterable=True),
 
-                # Numeric metadata - not indexed for text search but available for filtering
-                Property(name="page_start", data_type=DataType.INT),
-                Property(name="page_end", data_type=DataType.INT),
-                Property(name="char_start", data_type=DataType.INT),
-                Property(name="char_end", data_type=DataType.INT),
-                Property(name="token_count", data_type=DataType.INT),
+                # ==== Identificadores y organización ====
+                Property(name="doc_id", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=True),
+
+                Property(name="company_id", data_type=DataType.INT,
+                        index_filterable=True),    # ID entero
+                Property(name="company", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=True),  # nombre textual
+
+                Property(name="area_id", data_type=DataType.INT,
+                        index_filterable=True),    # ID entero
+                Property(name="area", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=True),  # nombre textual
+
+                Property(name="section_path", data_type=DataType.TEXT_ARRAY,
+                        index_searchable=False, index_filterable=True),
+
+                # ==== Posición en el documento ====
+                Property(name="page_start", data_type=DataType.INT, index_filterable=True),
+                Property(name="page_end", data_type=DataType.INT, index_filterable=True),
+
+                # ==== Información de embedding / trazabilidad ====
+                Property(name="embedding_model", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=True),
+                Property(name="embedding_dim", data_type=DataType.INT,
+                        index_filterable=True),
+
+                # Opcionales útiles (NO searcheables, solo guardados)
+                Property(name="chunk_id", data_type=DataType.TEXT, tokenization="field", index_searchable=False, index_filterable=False),
+                Property(name="token_count", data_type=DataType.INT, index_filterable=False),
+                Property(name="char_start", data_type=DataType.INT, index_filterable=False),
+                Property(name="char_end", data_type=DataType.INT, index_filterable=False),
+                Property(name="ingested_at", data_type=DataType.TEXT, index_searchable=False, index_filterable=False)
             ],
         )
 
