@@ -33,6 +33,11 @@ class EmbedAndUpsertFilesWithMetadataInput:
     chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
 
+    # Metadata IDs
+    company_id_int: int = 1
+    area_id_int: int = 1
+    embedding_model: str = "cohere.embed-multilingual-v3"
+
 @dataclass
 class EmbedAndUpsertFilesWithMetadataOutput:
     company_name: str
@@ -90,8 +95,12 @@ class EmbedAndUpsertFilesWithMetadata:
                     doc_id=doc_id,
                     chunks=embed_result.chunks,  # type: ignore[arg-type]
                     vectors=embed_result.vectors,
-                    company_id=params.company_name,
+                    company_id=params.company_id_int,
+                    company=params.company_name,
+                    area_id=params.area_id_int,
                     area=params.area_name,
+                    doc_title=pdf_file.stem,
+                    embedding_model=params.embedding_model,
                     collection_name=params.company_name  # Use company_name as collection name
                 )
 

@@ -398,7 +398,10 @@ def main():
                     min_unique_ratio=args.q_uniq_min,
                 ),
                 doc_id=args.doc_id,
-                company_id=getattr(args, 'company_id', 'default_company'),
+                company_id=1,  # Default numeric ID
+                company=getattr(args, 'company_id', 'default_company'),
+                area_id=1,  # Default area ID
+                area="GENERAL",  # Default area
                 generate_report=args.generate_report
             ))
 
@@ -441,6 +444,7 @@ def main():
                     min_alpha_ratio=args.q_alpha_min,
                     min_unique_ratio=args.q_uniq_min,
                 ),
+                company_id_int=1,  # Default numeric company ID
             ))
 
             print(f"Empresa: {out.company_id}")
@@ -491,6 +495,8 @@ def main():
                     min_alpha_ratio=args.q_alpha_min,
                     min_unique_ratio=args.q_uniq_min,
                 ),
+                company_id_int=1,  # Default numeric company ID
+                area_id_int=1,     # Default numeric area ID
             ))
 
             print(f"\n{'=' * 80}")

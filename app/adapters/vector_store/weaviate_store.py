@@ -1,6 +1,7 @@
 from typing import List, Optional
 from uuid import uuid5, NAMESPACE_URL
 from typing import Sequence
+from datetime import datetime
 
 from app.ports.outbound.chunker import ChunkType
 import weaviate
@@ -11,6 +12,7 @@ from weaviate.exceptions import WeaviateBaseError
 
 from app.ports.outbound.vector_store import VectorStorePort
 from app.config.settings import settings
+from app.domain.models.weaviate_metadata import WeaviateChunkMetadata
 
 class WeaviateVectorStore(VectorStorePort):
     def __init__(
@@ -45,7 +47,17 @@ class WeaviateVectorStore(VectorStorePort):
         except Exception:
             pass
 
-    def upsert_chunks(self, doc_id: str, chunks: Sequence[ChunkType], vectors: List[list[float]], company_id: str = "default_company", area: str = "VENTAS", collection_name: Optional[str] = None) -> int:
+    def upsert_chunks(self,
+                     doc_id: str,
+                     chunks: Sequence[ChunkType],
+                     vectors: List[list[float]],
+                     company_id: int,
+                     company: str,
+                     area_id: int,
+                     area: str,
+                     doc_title: str = "",
+                     embedding_model: str = "cohere.embed-multilingual-v3",
+                     collection_name: Optional[str] = None) -> int:
         print(f"🗃️ [UPSERT] Iniciando upsert a Weaviate collection '{collection_name or self.collection_name}'")
 
         if len(chunks) != len(vectors):
@@ -77,18 +89,20 @@ class WeaviateVectorStore(VectorStorePort):
             id_map: list[tuple[dict, list[float], str]] = []
 
             for c, vec in zip(batch_chunks, batch_vecs):
-                props = {
-                    "company_id": company_id,
-                    "area": area,
-                    "doc_id": doc_id,
-                    "chunk_id": c.chunk_id,   # tu hash/64hex queda como propiedad (no como uuid)
-                    "text": c.text,
-                    "page_start": c.page_start,
-                    "page_end": c.page_end,
-                    "char_start": c.char_start,
-                    "char_end": c.char_end,
-                    "token_count": c.token_count,
-                }
+                # Create metadata using domain model
+                metadata = WeaviateChunkMetadata.from_chunk(
+                    chunk=c,
+                    vector=vec,
+                    company_id=company_id,
+                    company=company,
+                    area_id=area_id,
+                    area=area,
+                    doc_id=doc_id,
+                    doc_title=doc_title,
+                    embedding_model=embedding_model
+                )
+
+                props = metadata.to_weaviate_properties()
                 # UUID RFC-4122 determinístico a partir de doc_id + chunk_id
                 uid = str(uuid5(NAMESPACE_URL, f"{doc_id}:{c.chunk_id}"))
                 objs.append(DataObject(properties=props, vector=vec, uuid=uid))
@@ -181,6 +195,7 @@ class WeaviateVectorStore(VectorStorePort):
                 Property(name="ingested_at", data_type=DataType.TEXT, index_searchable=False, index_filterable=False)
             ],
         )
+
 
     @staticmethod
     def _metric_from_str(s: str):
