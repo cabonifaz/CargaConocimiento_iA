@@ -63,13 +63,13 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             limit = min(page_total, hard_cap) if hard_cap is not None else page_total
 
             for i in range(limit):
-                print(f"\r📖 Extracting page {i+1}/{limit}...", end='', flush=True)
+                print(f"\rExtracting page {i+1}/{limit}...", end='', flush=True)
                 
                 # Try pymupdf4llm first for markdown formatting
                 try:
                     md_page_text = pymupdf4llm.to_markdown(doc, pages=[i])
                 except Exception as e:
-                    print(f"\r❌ Page {i+1}/{limit} - pymupdf4llm error: {e}")
+                    print(f"\rERROR Page {i+1}/{limit} - pymupdf4llm error: {e}")
                     md_page_text = ""
                 
                 # If pymupdf4llm fails, convert regular text to basic markdown
@@ -79,11 +79,11 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                     if len(regular_text.strip()) > 0:
                         # Convert plain text to basic markdown format
                         md_page_text = self._convert_to_markdown(regular_text)
-                        print(f"\r🔄 Page {i+1}/{limit} - Converted to markdown ({len(md_page_text)} chars)")
+                        print(f"\rPage {i+1}/{limit} - Converted to markdown ({len(md_page_text)} chars)")
                     else:
-                        print(f"\r⚠️  Page {i+1}/{limit} - Truly empty page (0 chars)")
+                        print(f"\rWARNING Page {i+1}/{limit} - Truly empty page (0 chars)")
                 else:
-                    print(f"\r✅ Extracted page {i+1}/{limit} ({len(md_page_text)} chars)")
+                    print(f"\rExtracted page {i+1}/{limit} ({len(md_page_text)} chars)")
                 
                 pages.append(md_page_text)
 

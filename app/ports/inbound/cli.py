@@ -31,6 +31,9 @@ from app.application.use_cases.embed_and_upsert_company_pdfs import (
 from app.application.use_cases.embed_and_upsert_files_with_metadata import (
     EmbedAndUpsertFilesWithMetadata, EmbedAndUpsertFilesWithMetadataInput
 )
+from app.application.use_cases.test_metadata_generation import (
+    TestMetadataGeneration, TestMetadataGenerationInput
+)
 from app.domain.services.md_text_normalizer import MdTextNormalizer
 from app.ports.outbound.chunker import ChunkerConfig
 from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
@@ -170,6 +173,7 @@ def main():
     ucf.add_argument("--q-min-chars", type=int, default=200)
     ucf.add_argument("--q-alpha-min", type=float, default=0.30)
     ucf.add_argument("--q-uniq-min", type=float, default=0.10)
+    ucf.add_argument("--test", action="store_true", help="Modo test: generar solo metadata JSON sin usar servicios externos (embedding/weaviate)")
 
     # --- bedrock-check (sanity de conexión) ---
     br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
@@ -466,7 +470,7 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        # Use semantic chunker for better results  
+        # Use semantic chunker for better results
         chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
@@ -475,12 +479,11 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockCohereEmbedMultilingual()
-        store = WeaviateVectorStore()
 
-        try:
-            uc = EmbedAndUpsertFilesWithMetadata(blob, extractor, normalizer, chunker, embedder, store)
-            out = uc.execute(EmbedAndUpsertFilesWithMetadataInput(
+        if args.test:
+            # Test mode: only generate metadata JSON files without external services
+            uc = TestMetadataGeneration(blob, extractor, normalizer, chunker)
+            out = uc.execute(TestMetadataGenerationInput(
                 company_id=args.company_id,
                 area_id=args.area_id,
                 max_pages=args.max_pages,
@@ -495,35 +498,82 @@ def main():
                     min_alpha_ratio=args.q_alpha_min,
                     min_unique_ratio=args.q_uniq_min,
                 ),
-                embedding_model=settings.BEDROCK_MODEL_ID,
             ))
 
             print(f"\n{'=' * 80}")
-            print(f"📊 RESUMEN FINAL")
+            print(f"FINAL SUMMARY - TEST MODE")
             print(f"{'=' * 80}")
-            print(f"🏢 Empresa ID: {out.company_id} | 🏷️ Área ID: {out.area_id}")
-            print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
-            print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
-            print(f"🗃️ Colección: C{args.company_id}")
+            print(f"Company ID: {out.company_id} | Area ID: {out.area_id}")
+            print(f"Files processed: {out.successful_files}/{out.total_files}")
+            print(f"Total metadata objects generated: {out.total_metadata_generated}")
+            print(f"JSON files saved in: reports/metadata/")
             print(f"{'=' * 80}")
-            
-            # Solo mostrar errores si los hay, resumen de éxitos
+
+            # Mostrar errores si los hay
             errors = [r for r in out.reports if not r.success]
             if errors:
-                print(f"❌ ERRORES ({len(errors)}):")
+                print(f"ERRORS ({len(errors)}):")
                 for report in errors:
-                    print(f"   • {report.file_path.name}: {report.error_message}")
-            
+                    print(f"   - {report.file_path.name}: {report.error_message}")
+
+            # Mostrar archivos procesados exitosamente
             successes = [r for r in out.reports if r.success]
-            if successes and len(successes) <= 10:
-                print(f"✅ ARCHIVOS PROCESADOS:")
+            if successes:
+                print(f"FILES PROCESSED:")
                 for report in successes:
-                    print(f"   • {report.file_path.name}: {report.chunks_written} chunks")
-            elif successes:
-                total_chunks_by_success = sum(r.chunks_written for r in successes)
-                print(f"✅ {len(successes)} archivos procesados exitosamente ({total_chunks_by_success} chunks totales)")
-        finally:
-            store.close()
+                    print(f"   - {report.file_path.name}: {report.metadata_count} metadata -> {Path(report.output_file).name}")
+
+        else:
+            # Normal mode: full pipeline with embedding and Weaviate
+            embedder = BedrockCohereEmbedMultilingual()
+            store = WeaviateVectorStore()
+
+            try:
+                uc = EmbedAndUpsertFilesWithMetadata(blob, extractor, normalizer, chunker, embedder, store)
+                out = uc.execute(EmbedAndUpsertFilesWithMetadataInput(
+                    company_id=args.company_id,
+                    area_id=args.area_id,
+                    max_pages=args.max_pages,
+                    chunker_cfg=ChunkerConfig(
+                        target_tokens=args.target,
+                        min_tokens=args.min_toks,
+                        page_separator=args.sep,
+                    ),
+                    quality_cfg=QualityConfig(
+                        min_tokens=args.q_min_toks,
+                        min_chars=args.q_min_chars,
+                        min_alpha_ratio=args.q_alpha_min,
+                        min_unique_ratio=args.q_uniq_min,
+                    ),
+                    embedding_model=settings.BEDROCK_MODEL_ID,
+                ))
+
+                print(f"\n{'=' * 80}")
+                print(f"📊 RESUMEN FINAL")
+                print(f"{'=' * 80}")
+                print(f"🏢 Empresa ID: {out.company_id} | 🏷️ Área ID: {out.area_id}")
+                print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
+                print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
+                print(f"🗃️ Colección: C{args.company_id}")
+                print(f"{'=' * 80}")
+
+                # Solo mostrar errores si los hay, resumen de éxitos
+                errors = [r for r in out.reports if not r.success]
+                if errors:
+                    print(f"❌ ERRORES ({len(errors)}):")
+                    for report in errors:
+                        print(f"   • {report.file_path.name}: {report.error_message}")
+
+                successes = [r for r in out.reports if r.success]
+                if successes and len(successes) <= 10:
+                    print(f"✅ ARCHIVOS PROCESADOS:")
+                    for report in successes:
+                        print(f"   • {report.file_path.name}: {report.chunks_written} chunks")
+                elif successes:
+                    total_chunks_by_success = sum(r.chunks_written for r in successes)
+                    print(f"✅ {len(successes)} archivos procesados exitosamente ({total_chunks_by_success} chunks totales)")
+            finally:
+                store.close()
             
     elif args.cmd == "bedrock-check":
         embedder = BedrockCohereEmbedMultilingual()

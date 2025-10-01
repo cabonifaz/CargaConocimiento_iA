@@ -59,5 +59,5 @@ class ExtractTextFromPdf:
                     report_file.write(page + "\n\n")
             print(f"Reporte de extracción guardado en: {report_path}")
 
-        print(f"📄 [EXTRACCIÓN] {target.name} → {len(res.pages)} páginas extraídas")
+        print(f"[EXTRACCION] {target.name} -> {len(res.pages)} paginas extraidas")
         return ExtractTextOutput(result=res, source_path=target)
