@@ -131,11 +131,16 @@ class WeaviateVectorStore(VectorStorePort):
                 vector_index_config=Configure.VectorIndex.hnsw(distance_metric=metric),
             ),
             properties=[
+                # Metadata fields - optimized for filtering and search
                 Property(name="company_id", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="area", data_type=DataType.TEXT, index_searchable=True),
                 Property(name="doc_id", data_type=DataType.TEXT, index_searchable=True),
-                Property(name="chunk_id", data_type=DataType.TEXT, index_searchable=True),
+                Property(name="chunk_id", data_type=DataType.TEXT, index_searchable=False),  # Used for dedup, not search
+
+                # Main content - fully indexed for vector + BM25 hybrid search
                 Property(name="text", data_type=DataType.TEXT, index_searchable=True),
+
+                # Numeric metadata - not indexed for text search but available for filtering
                 Property(name="page_start", data_type=DataType.INT),
                 Property(name="page_end", data_type=DataType.INT),
                 Property(name="char_start", data_type=DataType.INT),

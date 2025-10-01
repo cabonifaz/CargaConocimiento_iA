@@ -284,7 +284,7 @@ class SemanticChunkerOptimized:
     def chunk_document(self, pages: List[str], filename: str = "documento.pdf",
                       document_title: str = "Documento") -> Tuple[List[Chunk], str]:
         """Main chunking method."""
-        print("[CHUNKING] Método: Semántico optimizado con 25% overlap")
+        print("[CHUNKING] Método: Semántico optimizado con 15% overlap")
 
         self.current_filename = filename
         self.current_document_title = document_title
@@ -329,7 +329,7 @@ class SemanticChunkerOptimized:
         table_chunks = self._create_table_json_chunks(text, page_offsets, blocks)
         chunks.extend(table_chunks)
 
-        # 2. Create regular content chunks with 25% overlap
+        # 2. Create regular content chunks with 15% overlap
         content_chunks = self._create_content_chunks_with_overlap(text, page_offsets, blocks)
         chunks.extend(content_chunks)
 
@@ -372,7 +372,7 @@ class SemanticChunkerOptimized:
 
     def _create_content_chunks_with_overlap(self, text: str, page_offsets: List[int],
                                           blocks: List[Dict[str, Any]]) -> List[Chunk]:
-        """Create content chunks with 25% overlap."""
+        """Create content chunks with 15% overlap."""
         chunks: List[Chunk] = []
         target_tokens = self.cfg.target_tokens
         min_tokens = self.cfg.min_tokens
@@ -416,7 +416,7 @@ class SemanticChunkerOptimized:
                 )
                 chunks.append(chunk)
 
-            # Calculate 25% overlap for next chunk
+            # Calculate 15% overlap for next chunk
             if chunk_end >= len(text):
                 break
 
@@ -476,8 +476,8 @@ class SemanticChunkerOptimized:
         return "\n".join(headers)
 
     def _calculate_overlap_start(self, text: str, chunk_start: int, chunk_end: int, token_count: int) -> int:
-        """Calculate 25% overlap start position."""
-        overlap_tokens = max(1, int(token_count * 0.25))
+        """Calculate 15% overlap start position."""
+        overlap_tokens = max(1, int(token_count * 0.15))
         chunk_text = text[chunk_start:chunk_end]
         tokens = self.tok.tokenize(chunk_text)
 
