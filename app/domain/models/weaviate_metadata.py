@@ -1,7 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
-from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -36,86 +35,6 @@ class WeaviateChunkMetadata:
     char_start: int                     # Posición inicial en caracteres
     char_end: int                       # Posición final en caracteres
     ingested_at: str                    # Timestamp de ingesta (ISO format)
-
-    @classmethod
-    def from_chunk(cls,
-                   chunk,  # ChunkType
-                   vector: List[float],
-                   company_id: int,
-                   company: str,
-                   area_id: int,
-                   area: str,
-                   doc_id: str,
-                   doc_title: str = "",
-                   embedding_model: str = "cohere.embed-multilingual-v3") -> WeaviateChunkMetadata:
-        """Create metadata from a chunk and additional context."""
-
-        # Extract section information from chunk text
-        section_title, section_path, bm25_text = cls._extract_section_info(chunk.text)
-
-        return cls(
-            # Texto para búsqueda
-            text=chunk.text,
-            bm25_text=bm25_text,
-            doc_title=doc_title,
-            section_title=section_title,
-
-            # Identificadores
-            doc_id=doc_id,
-            company_id=company_id,
-            company=company,
-            area_id=area_id,
-            area=area,
-            section_path=section_path,
-
-            # Posición
-            page_start=chunk.page_start,
-            page_end=chunk.page_end,
-
-            # Embedding info
-            embedding_model=embedding_model,
-            embedding_dim=len(vector),
-
-            # Opcionales
-            chunk_id=chunk.chunk_id,
-            token_count=chunk.token_count,
-            char_start=chunk.char_start,
-            char_end=chunk.char_end,
-            ingested_at=datetime.now().isoformat(),
-        )
-
-    @staticmethod
-    def _extract_section_info(text: str) -> tuple[str, List[str], str]:
-        """Extract section title, section path, and BM25 text from chunk text."""
-        lines = text.split('\n')
-        section_title = ""
-        section_path = []
-        content_lines = []
-
-        # Extract hierarchy headers and build section path
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('#'):
-                # Count heading level
-                level = len(stripped) - len(stripped.lstrip('#'))
-                heading_text = stripped.lstrip('#').strip()
-
-                # Adjust section_path to current level
-                while len(section_path) >= level:
-                    section_path.pop()
-                section_path.append(heading_text)
-
-                # Use the last (deepest) heading as section_title
-                section_title = heading_text
-            else:
-                # Collect content for BM25 (skip headers)
-                if stripped and not stripped.startswith('#'):
-                    content_lines.append(stripped)
-
-        # Create BM25 text without headers (cleaner for keyword search)
-        bm25_text = ' '.join(content_lines)
-
-        return section_title, section_path, bm25_text
 
     def to_weaviate_properties(self) -> dict:
         """Convert to Weaviate properties dictionary."""

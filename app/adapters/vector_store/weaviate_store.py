@@ -13,6 +13,7 @@ from weaviate.exceptions import WeaviateBaseError
 from app.ports.outbound.vector_store import VectorStorePort
 from app.config.settings import settings
 from app.domain.models.weaviate_metadata import WeaviateChunkMetadata
+from app.domain.services.bm25_text_processor import BM25TextProcessor
 
 class WeaviateVectorStore(VectorStorePort):
     def __init__(
@@ -89,17 +90,39 @@ class WeaviateVectorStore(VectorStorePort):
             id_map: list[tuple[dict, list[float], str]] = []
 
             for c, vec in zip(batch_chunks, batch_vecs):
+                # Extract section information using domain service
+                section_title, section_path, bm25_text = BM25TextProcessor.extract_section_info(c.text)
+
                 # Create metadata using domain model
-                metadata = WeaviateChunkMetadata.from_chunk(
-                    chunk=c,
-                    vector=vec,
+                metadata = WeaviateChunkMetadata(
+                    # Texto para búsqueda
+                    text=c.text,
+                    bm25_text=bm25_text,
+                    doc_title=doc_title,
+                    section_title=section_title,
+
+                    # Identificadores
+                    doc_id=doc_id,
                     company_id=company_id,
                     company=company,
                     area_id=area_id,
                     area=area,
-                    doc_id=doc_id,
-                    doc_title=doc_title,
-                    embedding_model=embedding_model
+                    section_path=section_path,
+
+                    # Posición
+                    page_start=c.page_start,
+                    page_end=c.page_end,
+
+                    # Embedding info
+                    embedding_model=embedding_model,
+                    embedding_dim=len(vec),
+
+                    # Opcionales
+                    chunk_id=c.chunk_id,
+                    token_count=c.token_count,
+                    char_start=c.char_start,
+                    char_end=c.char_end,
+                    ingested_at=datetime.now().isoformat(),
                 )
 
                 props = metadata.to_weaviate_properties()
