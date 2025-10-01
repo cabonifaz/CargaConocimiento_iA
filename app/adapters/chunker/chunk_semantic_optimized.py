@@ -275,6 +275,9 @@ class SemanticChunkerOptimized:
         self.tok = tokenizer
         self.cfg = cfg or ChunkerConfig()
 
+        # Cohere API character limit
+        self.max_chars = 2048
+
         self.current_filename: str = "documento.pdf"
         self.current_document_title: str = "Documento"
 
@@ -348,6 +351,9 @@ class SemanticChunkerOptimized:
 
                     chunk_text = f"{hierarchy_header}\n{json_content}" if hierarchy_header else json_content
 
+                    # Validate character limit
+                    chunk_text = self._validate_and_fix_chunk_length(chunk_text)
+
                     chunk = Chunk(
                         text=chunk_text,
                         token_count=self.tok.count_tokens(chunk_text),
@@ -388,6 +394,9 @@ class SemanticChunkerOptimized:
 
             # Create enhanced text with hierarchy
             enhanced_text = f"{hierarchy_header}\n{chunk_text}" if hierarchy_header else chunk_text
+
+            # Validate character limit
+            enhanced_text = self._validate_and_fix_chunk_length(enhanced_text)
 
             token_count = self.tok.count_tokens(enhanced_text)
 
@@ -486,6 +495,10 @@ class SemanticChunkerOptimized:
 
         last_chunk = chunks[-1]
         merged_text = last_chunk.text + "\n\n" + new_text
+
+        # Validate character limit for merged text
+        merged_text = self._validate_and_fix_chunk_length(merged_text)
+
         merged_tokens = self.tok.count_tokens(merged_text)
 
         if merged_tokens <= self.cfg.target_tokens * 1.5:  # Allow some flexibility
@@ -509,6 +522,27 @@ class SemanticChunkerOptimized:
         pe = bisect.bisect_right(page_offsets, max(end_char - 1, 0)) - 1
         pe = max(pe, 0)
         return ps + 1, pe + 1
+
+    def _validate_and_fix_chunk_length(self, chunk_text: str) -> str:
+        """Validate chunk doesn't exceed character limit and truncate if needed."""
+        if len(chunk_text) <= self.max_chars:
+            return chunk_text
+
+        print(f"[WARNING] Chunk excede límite de caracteres ({len(chunk_text)} > {self.max_chars}), truncando...")
+
+        # Truncate to max_chars, trying to break at word boundary
+        truncated = chunk_text[:self.max_chars]
+
+        # Try to find last word boundary to avoid cutting words
+        last_space = truncated.rfind(' ')
+        last_newline = truncated.rfind('\n')
+
+        # Use the latest word boundary found
+        boundary = max(last_space, last_newline)
+        if boundary > self.max_chars * 0.9:  # Only if we don't lose too much content
+            truncated = truncated[:boundary]
+
+        return truncated
 
     @staticmethod
     def _hash(text: str) -> str:
