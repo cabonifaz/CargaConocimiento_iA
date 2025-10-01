@@ -4,7 +4,7 @@ from pathlib import Path
 from app.adapters.blob.local_fs import LocalFileSystemBlob
 from app.adapters.extract.pymupdf_text_extractor import PyMuPDFTextExtractor
 from app.adapters.tokenizer.simple_regex_tokenizer import SimpleRegexTokenizer
-from app.adapters.embedding.bedrock_titan_embedder import BedrockTitanEmbedder
+from app.adapters.embedding.bedrock_cohere_embed_multilingual import BedrockCohereEmbedMultilingual
 from app.adapters.vector_store.weaviate_store import WeaviateVectorStore
 
 from app.application.use_cases.extract_text_from_pdf import (
@@ -335,7 +335,7 @@ def main():
             ),
         )
 
-        embedder = BedrockTitanEmbedder()  # usa env: AWS_PROFILE, BEDROCK_REGION, BEDROCK_MODEL_ID, etc.
+        embedder = BedrockCohereEmbedMultilingual()  # usa env: AWS_PROFILE, BEDROCK_REGION, BEDROCK_MODEL_ID, etc.
 
         uc = EmbedChunksFromPdf(blob, extractor, normalizer, chunker, embedder)
         out = uc.execute(EmbedChunksFromPdfInput(
@@ -377,7 +377,7 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         store = WeaviateVectorStore()
 
         try:
@@ -422,7 +422,7 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         store = WeaviateVectorStore()
 
         try:
@@ -471,7 +471,7 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         store = WeaviateVectorStore()
 
         try:
@@ -521,7 +521,7 @@ def main():
             store.close()
             
     elif args.cmd == "bedrock-check":
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         vec = embedder.embed_texts([args.text])[0]
         print(f"Texto: {args.text}")
         print(f"Dimensión: {len(vec)}")
