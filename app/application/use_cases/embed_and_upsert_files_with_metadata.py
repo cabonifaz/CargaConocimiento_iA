@@ -16,6 +16,7 @@ from app.domain.services.chunk_quality import QualityConfig
 from app.application.use_cases.embed_chunks_from_pdf import (
     EmbedChunksFromPdf, EmbedChunksFromPdfInput
 )
+from app.config.settings import settings
 
 @dataclass
 class FileWithMetadataReport:
@@ -27,21 +28,17 @@ class FileWithMetadataReport:
 
 @dataclass
 class EmbedAndUpsertFilesWithMetadataInput:
-    company_name: str
-    area_name: str
+    company_id: int  # Now the main parameter (numeric ID)
+    area_id: int     # Now the main parameter (numeric ID)
     max_pages: Optional[int] = None
     chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
-
-    # Metadata IDs
-    company_id_int: int = 1
-    area_id_int: int = 1
     embedding_model: str = "cohere.embed-multilingual-v3"
 
 @dataclass
 class EmbedAndUpsertFilesWithMetadataOutput:
-    company_name: str
-    area_name: str
+    company_id: int
+    area_id: int
     total_files: int
     successful_files: int
     total_chunks_written: int
@@ -71,13 +68,13 @@ class EmbedAndUpsertFilesWithMetadata:
         successful_count = 0
         
         print(f"\n{'=' * 80}")
-        print(f"🏢 PROCESANDO ARCHIVOS DE EMPRESA: {params.company_name} | ÁREA: {params.area_name}")
+        print(f"🏢 PROCESANDO ARCHIVOS DE EMPRESA ID: {params.company_id} | ÁREA ID: {params.area_id}")
         print(f"📂 Archivos encontrados: {len(pdf_files)}")
         print(f"{'=' * 80}")
 
         for pdf_file in pdf_files:
             try:
-                print(f"\n📁 [PROCESANDO] {pdf_file.name} (empresa: {params.company_name}, área: {params.area_name})")
+                print(f"\n📁 [PROCESANDO] {pdf_file.name} (empresa_id: {params.company_id}, área_id: {params.area_id})")
                 # Use relative path from company_files
                 relative_path = Path("files") / pdf_file.name
                 
@@ -89,19 +86,21 @@ class EmbedAndUpsertFilesWithMetadata:
                     quality_cfg=params.quality_cfg,
                 ))
 
-                # Then upsert to collection with company name as collection and specified metadata
+                # Then upsert to collection with C+company_id format
                 doc_id = pdf_file.stem
+                collection_name = f"C{params.company_id}"  # Format: C304, C1, etc.
+
                 written = self.vector_store.upsert_chunks(
                     doc_id=doc_id,
                     chunks=embed_result.chunks,  # type: ignore[arg-type]
                     vectors=embed_result.vectors,
-                    company_id=params.company_id_int,
-                    company=params.company_name,
-                    area_id=params.area_id_int,
-                    area=params.area_name,
-                    doc_title=pdf_file.stem,
-                    embedding_model=params.embedding_model,
-                    collection_name=params.company_name  # Use company_name as collection name
+                    company_id=params.company_id,
+                    company="company_name",  # Default value as requested
+                    area_id=params.area_id,
+                    area="area_name",        # Default value as requested
+                    doc_title=pdf_file.stem,  # Use filename as doc_title
+                    embedding_model=settings.BEDROCK_MODEL_ID,  # Get from environment
+                    collection_name=collection_name
                 )
 
                 reports.append(FileWithMetadataReport(
@@ -127,8 +126,8 @@ class EmbedAndUpsertFilesWithMetadata:
                 print(f"❌ [ERROR] {pdf_file.name} → {str(e)}")
 
         return EmbedAndUpsertFilesWithMetadataOutput(
-            company_name=params.company_name,
-            area_name=params.area_name,
+            company_id=params.company_id,
+            area_id=params.area_id,
             total_files=len(pdf_files),
             successful_files=successful_count,
             total_chunks_written=total_chunks,

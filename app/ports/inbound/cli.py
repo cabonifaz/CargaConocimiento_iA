@@ -158,9 +158,9 @@ def main():
     ewc.add_argument("--generate-report", action="store_true", help="Generar reportes de extracción, normalización y chunking")
 
     # --- upsert-company-files (archivos de company_files/files/ con metadata personalizada) ---
-    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area personalizados")
-    ucf.add_argument("company_name", type=str, help="Nombre de la empresa (usado como company_id y nombre de colección)")
-    ucf.add_argument("area_name", type=str, help="Nombre del área (metadata area)")
+    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area_id numéricos")
+    ucf.add_argument("company_id", type=int, help="ID numérico de la empresa (ej: 304)")
+    ucf.add_argument("area_id", type=int, help="ID numérico del área (ej: 1)")
     ucf.add_argument("--max-pages", type=int, default=None)
     ucf.add_argument("--target", type=int, default=400)
     ucf.add_argument("--overlap", type=int, default=60)
@@ -481,8 +481,8 @@ def main():
         try:
             uc = EmbedAndUpsertFilesWithMetadata(blob, extractor, normalizer, chunker, embedder, store)
             out = uc.execute(EmbedAndUpsertFilesWithMetadataInput(
-                company_name=args.company_name,
-                area_name=args.area_name,
+                company_id=args.company_id,
+                area_id=args.area_id,
                 max_pages=args.max_pages,
                 chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
@@ -495,17 +495,16 @@ def main():
                     min_alpha_ratio=args.q_alpha_min,
                     min_unique_ratio=args.q_uniq_min,
                 ),
-                company_id_int=1,  # Default numeric company ID
-                area_id_int=1,     # Default numeric area ID
+                embedding_model=settings.BEDROCK_MODEL_ID,
             ))
 
             print(f"\n{'=' * 80}")
             print(f"📊 RESUMEN FINAL")
             print(f"{'=' * 80}")
-            print(f"🏢 Empresa: {out.company_name} | 🏷️ Área: {out.area_name}")
+            print(f"🏢 Empresa ID: {out.company_id} | 🏷️ Área ID: {out.area_id}")
             print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
             print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
-            print(f"🗃️ Colección: {args.company_name}")
+            print(f"🗃️ Colección: C{args.company_id}")
             print(f"{'=' * 80}")
             
             # Solo mostrar errores si los hay, resumen de éxitos
