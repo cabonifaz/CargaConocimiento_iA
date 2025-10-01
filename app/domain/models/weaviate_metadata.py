@@ -15,9 +15,9 @@ class WeaviateChunkMetadata:
 
     # ==== Identificadores y organización ====
     doc_id: str                         # ID del documento
-    company_id: int                     # ID entero de la empresa
+    company_id: str                     # ID string de la empresa (sin espacios)
     company: str                        # Nombre textual de la empresa
-    area_id: int                        # ID entero del área
+    area_id: str                        # ID string del área (sin espacios)
     area: str                           # Nombre textual del área
     section_path: List[str]             # Ruta jerárquica de secciones
 
@@ -73,14 +73,14 @@ class WeaviateChunkMetadata:
 @dataclass(frozen=True)
 class CompanyInfo:
     """Information about a company for metadata."""
-    id: int
+    id: str
     name: str
 
 
 @dataclass(frozen=True)
 class AreaInfo:
     """Information about an area for metadata."""
-    id: int
+    id: str
     name: str
 
 

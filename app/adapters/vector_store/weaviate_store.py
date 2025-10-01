@@ -52,9 +52,9 @@ class WeaviateVectorStore(VectorStorePort):
                      doc_id: str,
                      chunks: Sequence[ChunkType],
                      vectors: List[list[float]],
-                     company_id: int,
+                     company_id: str,
                      company: str,
-                     area_id: int,
+                     area_id: str,
                      area: str,
                      doc_title: str = "",
                      embedding_model: str = "cohere.embed-multilingual-v3",
@@ -187,13 +187,13 @@ class WeaviateVectorStore(VectorStorePort):
                 Property(name="doc_id", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
 
-                Property(name="company_id", data_type=DataType.INT,
-                        index_filterable=True),    # ID entero
+                Property(name="company_id", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=True),    # ID string
                 Property(name="company", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),  # nombre textual
 
-                Property(name="area_id", data_type=DataType.INT,
-                        index_filterable=True),    # ID entero
+                Property(name="area_id", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=True),    # ID string
                 Property(name="area", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),  # nombre textual
 

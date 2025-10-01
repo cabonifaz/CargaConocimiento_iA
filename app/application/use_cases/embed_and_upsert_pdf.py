@@ -26,11 +26,11 @@ class EmbedAndUpsertPdfInput:
     doc_id: Optional[str] = None  # si no viene, se usará el nombre de archivo (stem)
 
     # Company information
-    company_id: int = 1
+    company_id: str = "1"
     company: str = "default_company"
 
     # Area information
-    area_id: int = 1
+    area_id: str = "1"
     area: str = "GENERAL"
 
     # Document metadata

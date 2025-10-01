@@ -32,8 +32,8 @@ class TestMetadataReport:
 
 @dataclass
 class TestMetadataGenerationInput:
-    company_id: int
-    area_id: int
+    company_id: str
+    area_id: str
     max_pages: Optional[int] = None
     chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
@@ -41,8 +41,8 @@ class TestMetadataGenerationInput:
 
 @dataclass
 class TestMetadataGenerationOutput:
-    company_id: int
-    area_id: int
+    company_id: str
+    area_id: str
     total_files: int
     successful_files: int
     total_metadata_generated: int

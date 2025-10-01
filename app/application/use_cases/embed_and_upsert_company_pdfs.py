@@ -34,7 +34,7 @@ class EmbedAndUpsertCompanyPdfsInput:
     quality_cfg: Optional[QualityConfig] = None
 
     # Company metadata
-    company_id_int: int = 1  # Numeric ID for Weaviate
+    company_id_str: str = "1"  # String ID for Weaviate
     embedding_model: str = "cohere.embed-multilingual-v3"
 
 @dataclass
@@ -90,7 +90,7 @@ class EmbedAndUpsertCompanyPdfs:
                     doc_id=doc_id,
                     chunks=embed_result.chunks,  # type: ignore[arg-type]
                     vectors=embed_result.vectors,
-                    company_id=params.company_id_int,
+                    company_id=params.company_id_str,
                     company=params.company_id,
                     area_id=area_id,
                     area=area,

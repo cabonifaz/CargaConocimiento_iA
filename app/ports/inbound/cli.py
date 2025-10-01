@@ -161,9 +161,9 @@ def main():
     ewc.add_argument("--generate-report", action="store_true", help="Generar reportes de extracción, normalización y chunking")
 
     # --- upsert-company-files (archivos de company_files/files/ con metadata personalizada) ---
-    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area_id numéricos")
-    ucf.add_argument("company_id", type=int, help="ID numérico de la empresa (ej: 304)")
-    ucf.add_argument("area_id", type=int, help="ID numérico del área (ej: 1)")
+    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area_id string (sin espacios)")
+    ucf.add_argument("company_id", type=str, help="ID string de la empresa sin espacios (ej: '304' o 'company-a')")
+    ucf.add_argument("area_id", type=str, help="ID string del área sin espacios (ej: '1' o 'legal')")
     ucf.add_argument("--max-pages", type=int, default=None)
     ucf.add_argument("--target", type=int, default=400)
     ucf.add_argument("--overlap", type=int, default=60)
@@ -402,9 +402,9 @@ def main():
                     min_unique_ratio=args.q_uniq_min,
                 ),
                 doc_id=args.doc_id,
-                company_id=1,  # Default numeric ID
+                company_id="1",  # Default string ID
                 company=getattr(args, 'company_id', 'default_company'),
-                area_id=1,  # Default area ID
+                area_id="1",  # Default area ID
                 area="GENERAL",  # Default area
                 generate_report=args.generate_report
             ))
@@ -448,7 +448,7 @@ def main():
                     min_alpha_ratio=args.q_alpha_min,
                     min_unique_ratio=args.q_uniq_min,
                 ),
-                company_id_int=1,  # Default numeric company ID
+                company_id_str="1",  # Default string company ID
             ))
 
             print(f"Empresa: {out.company_id}")
@@ -466,6 +466,14 @@ def main():
             store.close()
 
     elif args.cmd == "upsert-company-files":
+        # Validate company_id and area_id have no whitespace
+        if ' ' in args.company_id or '\t' in args.company_id or '\n' in args.company_id:
+            print("ERROR: company_id no puede contener espacios en blanco")
+            return
+        if ' ' in args.area_id or '\t' in args.area_id or '\n' in args.area_id:
+            print("ERROR: area_id no puede contener espacios en blanco")
+            return
+
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()

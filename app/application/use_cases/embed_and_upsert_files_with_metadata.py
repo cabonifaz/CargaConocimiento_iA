@@ -28,8 +28,8 @@ class FileWithMetadataReport:
 
 @dataclass
 class EmbedAndUpsertFilesWithMetadataInput:
-    company_id: int  # Now the main parameter (numeric ID)
-    area_id: int     # Now the main parameter (numeric ID)
+    company_id: str  # Now the main parameter (string ID without whitespace)
+    area_id: str     # Now the main parameter (string ID without whitespace)
     max_pages: Optional[int] = None
     chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
@@ -37,8 +37,8 @@ class EmbedAndUpsertFilesWithMetadataInput:
 
 @dataclass
 class EmbedAndUpsertFilesWithMetadataOutput:
-    company_id: int
-    area_id: int
+    company_id: str
+    area_id: str
     total_files: int
     successful_files: int
     total_chunks_written: int
