@@ -56,41 +56,20 @@ class SemanticChunker:
         full_text = "".join(parts)
         return full_text, offsets
     
-    def _generate_metadata_header(self, block_context: Dict[str, Any], page_num: int) -> str:
-        """Generate contextual metadata header for chunk."""
-        # Build section hierarchy string
-        section_path = " > ".join(self.section_hierarchy) if self.section_hierarchy else "Documento principal"
+    def _generate_hierarchical_header(self, block_context: Dict[str, Any], page_num: int) -> str:
+        """Generate hierarchical titles header for chunk."""
+        # Use the hierarchy from the block context, not the global one
+        hierarchy = block_context.get('hierarchy', [])
+        if not hierarchy:
+            return ""
 
-        # Determine content type
-        content_type = block_context.get('type', 'paragraph')
-        type_map = {
-            'heading': 'Título',
-            'paragraph': 'Párrafo',
-            'list': 'Lista',
-            'table': 'Tabla',
-            'table_json': 'Tabla',
-            'code': 'Código',
-            'quote': 'Cita'
-        }
-        content_type_name = type_map.get(content_type, 'Texto')
+        # Generate hierarchical titles
+        headers = []
+        for i, section_title in enumerate(hierarchy):
+            level = i + 1  # Start from H1
+            headers.append(f"{'#' * level} {section_title}")
 
-        # Add specific context for lists and tables
-        additional_context = ""
-        if content_type == 'list' and self.current_list_context:
-            additional_context = f"\nLista de: {self.current_list_context}"
-        elif content_type in ['table', 'table_json'] and self.current_table_headers:
-            headers_str = ", ".join(self.current_table_headers)
-            additional_context = f"\nColumnas: {headers_str}"
-
-        metadata = f"""[[CONTEXTO]]
-Archivo: {self.current_filename}
-Documento: {self.current_document_title}
-Sección: {section_path}
-Tipo: {content_type_name}
-Página: {page_num}{additional_context}
-[[/CONTEXTO]]"""
-
-        return metadata
+        return "\n".join(headers)
 
     def _parse_markdown_blocks(self, text: str) -> List[Dict[str, Any]]:
         """Parse Markdown blocks for semantic boundaries and extract context."""
@@ -207,7 +186,8 @@ Página: {page_num}{additional_context}
                 'text': block_text,
                 'start': block_start,
                 'end': block_end,
-                'level': self._get_heading_level(line_content) if block_type == 'heading' else 0
+                'level': self._get_heading_level(line_content) if block_type == 'heading' else 0,
+                'hierarchy': self.section_hierarchy.copy()  # Captura la jerarquía actual
             })
             
             offset += len(line)
@@ -292,6 +272,7 @@ Página: {page_num}{additional_context}
         """Get heading level (1-6) from heading line."""
         match = re.match(r'^(#{1,6})\s+', line.strip())
         return len(match.group(1)) if match else 0
+
     
     def _semantic_chunk_with_overlap(self, text: str, page_offsets: List[int], blocks: List[Dict[str, Any]]) -> List[Chunk]:
         """Create semantic chunks with 25% overlap."""
@@ -392,7 +373,7 @@ Página: {page_num}{additional_context}
 
                     # Create JSON chunk for this markdown table
                     page_start, page_end = self._pages_for_span(page_offsets, block['start'], block['end'])
-                    block_context = {'type': 'table_json'}
+                    block_context = {'type': 'table_json', 'hierarchy': block.get('hierarchy', [])}
 
                     chunk = self._create_chunk(
                         json_content,
@@ -433,7 +414,7 @@ Página: {page_num}{additional_context}
 
                 # Create chunk for this JSON table
                 page_start, page_end = self._pages_for_span(page_offsets, block['start'], block['end'])
-                block_context = {'type': 'table_json'}
+                block_context = {'type': 'table_json', 'hierarchy': block.get('hierarchy', [])}
 
                 chunk = self._create_chunk(
                     block_text.strip(),
@@ -533,13 +514,16 @@ Página: {page_num}{additional_context}
         return ps + 1, pe + 1
     
     def _create_chunk(self, text: str, char_start: int, char_end: int, page_start: int, page_end: int, block_context: Dict[str, Any] = None) -> Chunk:
-        """Create a Chunk object with contextual metadata."""
-        # Generate metadata header
+        """Create a Chunk object with hierarchical titles."""
+        # Generate hierarchical header
         context_info = block_context or {'type': 'paragraph'}
-        metadata_header = self._generate_metadata_header(context_info, page_start)
+        hierarchical_header = self._generate_hierarchical_header(context_info, page_start)
 
-        # Combine metadata with actual content
-        enhanced_text = f"{metadata_header}\n\n{text}"
+        # Combine hierarchical titles with actual content
+        if hierarchical_header:
+            enhanced_text = f"{hierarchical_header}\n{text}"
+        else:
+            enhanced_text = text
 
         return Chunk(
             text=enhanced_text,
@@ -552,11 +536,20 @@ Página: {page_num}{additional_context}
         )
 
     def _extract_content_from_chunk(self, chunk_text: str) -> str:
-        """Extract the actual content from a chunk, removing metadata header."""
-        if "[[/CONTEXTO]]" in chunk_text:
-            parts = chunk_text.split("[[/CONTEXTO]]", 1)
-            if len(parts) > 1:
-                return parts[1].strip()
+        """Extract the actual content from a chunk, removing hierarchical headers."""
+        # Since we're now using hierarchical headers, we need a different approach
+        # to extract just the content without the repeated titles
+        lines = chunk_text.split('\n')
+
+        # Skip heading lines at the beginning
+        content_start = 0
+        for i, line in enumerate(lines):
+            if not line.strip().startswith('#'):
+                content_start = i
+                break
+
+        if content_start > 0:
+            return '\n'.join(lines[content_start:]).strip()
         return chunk_text
 
     def _find_block_context_for_span(self, blocks: List[Dict[str, Any]], start_char: int, end_char: int) -> Dict[str, Any]:
@@ -568,16 +561,36 @@ Página: {page_num}{additional_context}
                 intersecting_blocks.append(block)
 
         if not intersecting_blocks:
-            return {'type': 'paragraph'}
+            # Find the nearest heading hierarchy by looking at blocks before this span
+            nearest_hierarchy = self._find_nearest_hierarchy(blocks, start_char)
+            return {'type': 'paragraph', 'hierarchy': nearest_hierarchy}
 
-        # Prefer structured content over paragraphs
-        priority_order = ['heading', 'table', 'table_json', 'list', 'code', 'quote', 'paragraph']
-        for content_type in priority_order:
-            for block in intersecting_blocks:
-                if block['type'] == content_type:
-                    return block
+        # Find the block with the most specific hierarchy (longest hierarchy list)
+        best_block = intersecting_blocks[0]
+        for block in intersecting_blocks:
+            # Prefer blocks with longer hierarchy (more specific context)
+            if len(block.get('hierarchy', [])) > len(best_block.get('hierarchy', [])):
+                best_block = block
+            # If same hierarchy length, prefer structured content over paragraphs
+            elif len(block.get('hierarchy', [])) == len(best_block.get('hierarchy', [])):
+                priority_order = ['heading', 'table', 'table_json', 'list', 'code', 'quote', 'paragraph']
+                if (priority_order.index(block['type']) if block['type'] in priority_order else 999) < \
+                   (priority_order.index(best_block['type']) if best_block['type'] in priority_order else 999):
+                    best_block = block
 
-        return intersecting_blocks[0]
+        return best_block
+
+    def _find_nearest_hierarchy(self, blocks: List[Dict[str, Any]], position: int) -> List[str]:
+        """Find the nearest heading hierarchy before the given position."""
+        nearest_hierarchy = []
+        for block in reversed(blocks):
+            if block['start'] < position and block['type'] == 'heading':
+                # Found a heading before this position, use its hierarchy
+                hierarchy = block.get('hierarchy', [])
+                if hierarchy:
+                    nearest_hierarchy = hierarchy
+                    break
+        return nearest_hierarchy
 
     def _parse_markdown_table(self, table_text: str) -> Dict[str, Any]:
         """

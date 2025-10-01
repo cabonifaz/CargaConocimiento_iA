@@ -36,8 +36,17 @@ from app.ports.outbound.chunker import ChunkerConfig
 from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
 from app.adapters.chunker.chunk_global_md import ChunkGlobalMdAdapter
 from app.adapters.chunker.chunk_semantic import ChunkSemanticAdapter
+from app.adapters.chunker.chunk_semantic_optimized import ChunkSemanticOptimizedAdapter
 from app.domain.services.chunk_quality import QualityConfig
 from app.config.settings import settings
+
+
+def create_semantic_chunker(tokenizer, config, use_optimized=True):
+    """Create semantic chunker - optimized version by default."""
+    if use_optimized:
+        return ChunkSemanticOptimizedAdapter(tokenizer, config)
+    else:
+        return ChunkSemanticAdapter(tokenizer, config)
 
 
 def main():
@@ -193,7 +202,7 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         # Use semantic chunker for better results
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -219,7 +228,7 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -245,7 +254,7 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -273,7 +282,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -317,7 +326,7 @@ def main():
         normalizer = MdTextNormalizer()
 
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -360,7 +369,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -405,7 +414,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -454,7 +463,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
