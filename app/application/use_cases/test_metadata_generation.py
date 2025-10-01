@@ -122,7 +122,7 @@ class TestMetadataGeneration:
                         company_id=params.company_id,
                         company="company_name",
                         area_id=params.area_id,
-                        area="area_name",
+                        area=params.area_id,
                         section_path=section_path,
 
                         # Position

@@ -97,7 +97,7 @@ class EmbedAndUpsertFilesWithMetadata:
                     company_id=params.company_id,
                     company="company_name",  # Default value as requested
                     area_id=params.area_id,
-                    area="area_name",        # Default value as requested
+                    area=params.area_id,     # Use area_id value
                     doc_title=pdf_file.stem,  # Use filename as doc_title
                     embedding_model=settings.BEDROCK_MODEL_ID,  # Get from environment
                     collection_name=collection_name

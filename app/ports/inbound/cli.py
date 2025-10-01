@@ -405,7 +405,7 @@ def main():
                 company_id="1",  # Default string ID
                 company=getattr(args, 'company_id', 'default_company'),
                 area_id="1",  # Default area ID
-                area="GENERAL",  # Default area
+                area="1",        # Default area same as area_id
                 generate_report=args.generate_report
             ))
 
