@@ -103,7 +103,7 @@ class TestMetadataGeneration:
                 # Generate metadata for each chunk
                 metadata_objects = []
                 doc_id = pdf_file.stem
-                collection_name = f"C{params.company_id}"
+                collection_name = params.company_id  # Use company_id directly as collection name
 
                 for chunk in chunk_result.chunks:
                     # Extract section information using domain service

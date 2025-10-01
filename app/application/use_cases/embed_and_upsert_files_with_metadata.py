@@ -86,9 +86,9 @@ class EmbedAndUpsertFilesWithMetadata:
                     quality_cfg=params.quality_cfg,
                 ))
 
-                # Then upsert to collection with C+company_id format
+                # Then upsert to collection using company_id directly as collection name
                 doc_id = pdf_file.stem
-                collection_name = f"C{params.company_id}"  # Format: C304, C1, etc.
+                collection_name = params.company_id  # Use company_id directly as collection name
 
                 written = self.vector_store.upsert_chunks(
                     doc_id=doc_id,

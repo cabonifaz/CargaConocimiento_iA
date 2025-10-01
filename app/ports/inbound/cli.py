@@ -562,7 +562,7 @@ def main():
                 print(f"🏢 Empresa ID: {out.company_id} | 🏷️ Área ID: {out.area_id}")
                 print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
                 print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
-                print(f"🗃️ Colección: C{args.company_id}")
+                print(f"Coleccion: {args.company_id}")
                 print(f"{'=' * 80}")
 
                 # Solo mostrar errores si los hay, resumen de éxitos
