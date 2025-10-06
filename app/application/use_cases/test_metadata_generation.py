@@ -93,7 +93,7 @@ class TestMetadataGeneration:
 
                 # Extract, normalize and chunk (but skip embedding)
                 chunk_result = self._extract_and_chunk_only(
-                    relative_path, params.max_pages, params.chunker_cfg, params.quality_cfg
+                    relative_path, params.max_pages, params.chunker_cfg, params.quality_cfg, params.company_id, params.area_id
                 )
 
                 if not chunk_result.chunks:
@@ -189,24 +189,120 @@ class TestMetadataGeneration:
             reports=reports,
         )
 
-    def _extract_and_chunk_only(self, relative_path: Path, max_pages, chunker_cfg, quality_cfg):
-        """Extract and chunk without embedding."""
+    def _extract_and_chunk_only(self, relative_path: Path, max_pages, chunker_cfg, quality_cfg, company_id: str, area_id: str):
+        """Extract and chunk without embedding, generating reports for test mode."""
+        from app.application.use_cases.extract_text_from_pdf import (
+            ExtractTextFromPdf, ExtractTextInput
+        )
+        from app.application.use_cases.extract_and_normalize_pdf import (
+            ExtractAndNormalizePdf, ExtractAndNormalizeInput
+        )
         from app.application.use_cases.extract_normalize_chunk_global_pdf import (
             ExtractNormalizeChunkGlobalPdf, ExtractNormalizeChunkGlobalInput
         )
+        from datetime import datetime
 
-        # Use the real extraction and chunking logic with our components
-        extract_chunk_uc = ExtractNormalizeChunkGlobalPdf(
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = relative_path.stem
+
+        # 1. Extract text and save report
+        extract_uc = ExtractTextFromPdf(self.blob, self.extractor)
+        extract_result = extract_uc.execute(ExtractTextInput(
+            relative_path=relative_path,
+            max_pages=max_pages,
+            generate_report=False  # We'll create our own custom report
+        ))
+
+        # Save extraction report
+        extraction_dir = Path("reports/extraction")
+        extraction_dir.mkdir(parents=True, exist_ok=True)
+        extraction_report_path = extraction_dir / f"extraction-{filename}-{timestamp}.txt"
+
+        with extraction_report_path.open("w", encoding="utf-8") as f:
+            f.write(f"=== REPORTE DE EXTRACCIÓN ===\n")
+            f.write(f"Archivo: {extract_result.source_path}\n")
+            f.write(f"Company ID: {company_id}\n")
+            f.write(f"Area ID: {area_id}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Páginas extraídas: {len(extract_result.result.pages)}\n")
+            f.write(f"Total de caracteres: {sum(len(page) for page in extract_result.result.pages)}\n\n")
+
+            for i, page in enumerate(extract_result.result.pages, 1):
+                f.write(f"--- Página {i} ---\n")
+                f.write(page)
+                f.write("\n\n")
+
+        # 2. Normalize text and save report
+        normalize_uc = ExtractAndNormalizePdf(self.blob, self.extractor, self.normalizer)
+        normalize_result = normalize_uc.execute(ExtractAndNormalizeInput(
+            relative_path=relative_path,
+            max_pages=max_pages,
+            join_pages=False,
+            generate_report=False  # We'll create our own custom report
+        ))
+
+        # Save normalization report
+        normalization_dir = Path("reports/normalization")
+        normalization_dir.mkdir(parents=True, exist_ok=True)
+        normalization_report_path = normalization_dir / f"normalization-{filename}-{timestamp}.txt"
+
+        with normalization_report_path.open("w", encoding="utf-8") as f:
+            f.write(f"=== REPORTE DE NORMALIZACIÓN ===\n")
+            f.write(f"Archivo: {normalize_result.source_path}\n")
+            f.write(f"Company ID: {company_id}\n")
+            f.write(f"Area ID: {area_id}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Páginas normalizadas: {len(normalize_result.normalized_pages or [])}\n")
+            f.write(f"Total de caracteres: {sum(len(page) for page in (normalize_result.normalized_pages or []))}\n\n")
+
+            for i, page in enumerate(normalize_result.normalized_pages or [], 1):
+                f.write(f"--- Página Normalizada {i} ---\n")
+                f.write(page)
+                f.write("\n\n")
+
+        # 3. Chunk text and save report
+        chunk_uc = ExtractNormalizeChunkGlobalPdf(
             self.blob,
             self.extractor,
             self.normalizer,
             self.chunker
         )
 
-        return extract_chunk_uc.execute(ExtractNormalizeChunkGlobalInput(
+        chunk_result = chunk_uc.execute(ExtractNormalizeChunkGlobalInput(
             relative_path=relative_path,
             max_pages=max_pages,
+            generate_report=False  # We'll create our own custom report
         ))
+
+        # Save chunking report
+        chunking_dir = Path("reports/chunking")
+        chunking_dir.mkdir(parents=True, exist_ok=True)
+        chunking_report_path = chunking_dir / f"chunking-{filename}-{timestamp}.txt"
+
+        with chunking_report_path.open("w", encoding="utf-8") as f:
+            f.write(f"=== REPORTE DE CHUNKING ===\n")
+            f.write(f"Archivo: {chunk_result.source_path}\n")
+            f.write(f"Company ID: {company_id}\n")
+            f.write(f"Area ID: {area_id}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Páginas procesadas: {chunk_result.page_count}\n")
+            f.write(f"Chunks generados: {len(chunk_result.chunks)}\n")
+            f.write(f"Configuración del chunker: {self.chunker.get_config() if hasattr(self.chunker, 'get_config') else 'N/A'}\n\n")
+
+            for i, chunk in enumerate(chunk_result.chunks, 1):
+                f.write(f"--- Chunk {i} ---\n")
+                f.write(f"ID: {chunk.chunk_id}\n")
+                f.write(f"Páginas: {chunk.page_start}-{chunk.page_end}\n")
+                f.write(f"Tokens: {chunk.token_count}\n")
+                f.write(f"Caracteres: {chunk.char_start}-{chunk.char_end}\n")
+                f.write(f"Contenido:\n{chunk.text}\n\n")
+
+        print(f"Reportes guardados:")
+        print(f"  - Extracción: {extraction_report_path}")
+        print(f"  - Normalización: {normalization_report_path}")
+        print(f"  - Chunking: {chunking_report_path}")
+
+        return chunk_result
 
     def _get_pdf_files(self, files_folder: Path) -> List[Path]:
         """Get all PDF files from the files folder."""

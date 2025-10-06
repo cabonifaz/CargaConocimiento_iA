@@ -22,6 +22,21 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
     def __init__(self, config: Optional[PyMuPDFConfig] = None) -> None:
         self.cfg = config or PyMuPDFConfig()
+
+    def _is_slide_application(self, producer: Optional[str], creator: Optional[str]) -> bool:
+        """Detecta si el PDF fue creado desde una aplicación de slides."""
+        if not producer and not creator:
+            return False
+
+        slide_apps = [
+            'powerpoint', 'microsoft office powerpoint', 'canva', 'google slides',
+            'prezi', 'keynote', 'libre office impress', 'openoffice impress'
+        ]
+
+        producer_lower = (producer or '').lower()
+        creator_lower = (creator or '').lower()
+
+        return any(app in producer_lower or app in creator_lower for app in slide_apps)
     
     def _convert_to_markdown(self, text: str) -> str:
         """Convert plain text to basic markdown format."""
@@ -62,12 +77,23 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             page_total = doc.page_count  # número de páginas
             limit = min(page_total, hard_cap) if hard_cap is not None else page_total
 
+            # Obtener metadatos para validar si es PDF de slides
+            meta = doc.metadata or {}
+            producer = meta.get("producer") or meta.get("Producer")
+            creator = meta.get("creator") or meta.get("Creator")
+
+            is_slide_pdf = self._is_slide_application(producer, creator)
+            ignore_graphics = is_slide_pdf
+
+            print(f"Producer: {producer}, Creator: {creator}")
+            print(f"PDF de slides detectado: {is_slide_pdf}, ignore_graphics: {ignore_graphics}")
+
             for i in range(limit):
                 print(f"\rExtracting page {i+1}/{limit}...", end='', flush=True)
-                
+
                 # Try pymupdf4llm first for markdown formatting
                 try:
-                    md_page_text = pymupdf4llm.to_markdown(doc, pages=[i])
+                    md_page_text = pymupdf4llm.to_markdown(doc, pages=[i], ignore_graphics=ignore_graphics)
                 except Exception as e:
                     print(f"\rERROR Page {i+1}/{limit} - pymupdf4llm error: {e}")
                     md_page_text = ""
@@ -87,11 +113,8 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                 
                 pages.append(md_page_text)
 
-            meta = doc.metadata or {}
-            producer = None
-            # Clave típica en metadata es 'producer'
-            if isinstance(meta, dict):
-                producer = meta.get("producer") or meta.get("Producer")
+            # El producer ya fue obtenido arriba para la validación
+            producer_final = producer if isinstance(producer, str) else None
 
             print(f"- {len(pages)} páginas extraídas (de {page_total})")
 
@@ -102,7 +125,7 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             return TextExtractionResult(
                 pages=pages,
                 page_count=len(pages),
-                producer=producer if isinstance(producer, str) else None,
+                producer=producer_final,
             )
         finally:
             doc.close()
