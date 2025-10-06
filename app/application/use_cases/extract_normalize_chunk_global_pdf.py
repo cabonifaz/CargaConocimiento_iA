@@ -27,6 +27,9 @@ class ExtractNormalizeChunkGlobalOutput:
     page_count: int
     chunks: List[ChunkType]
     full_text: str  # texto normalizado unido (por si quieres guardarlo / debug)
+    # New fields for detailed reporting
+    extracted_pages: Optional[List[str]] = None  # páginas extraídas originales
+    normalized_pages: Optional[List[str]] = None  # páginas normalizadas
 
 class ExtractNormalizeChunkGlobalPdf:
     def __init__(
@@ -54,6 +57,10 @@ class ExtractNormalizeChunkGlobalPdf:
         ))
 
         norm_pages = norm_result.normalized_pages or []
+
+        # Capture intermediate results for detailed reporting
+        extracted_pages = norm_result.extracted_pages  # Now available from ExtractAndNormalizeOutput
+        normalized_pages = norm_result.normalized_pages
 
         # 3) chunking global
         # Extract filename and try to get document title
@@ -88,6 +95,8 @@ class ExtractNormalizeChunkGlobalPdf:
             page_count=norm_result.page_count,
             chunks=chunks,
             full_text=full_text,
+            extracted_pages=extracted_pages,
+            normalized_pages=normalized_pages,
         )
 
     def _extract_document_title(self, pages: List[str], filename: str) -> str:

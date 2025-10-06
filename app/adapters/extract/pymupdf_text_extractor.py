@@ -23,20 +23,36 @@ class PyMuPDFTextExtractor(TextExtractorPort):
     def __init__(self, config: Optional[PyMuPDFConfig] = None) -> None:
         self.cfg = config or PyMuPDFConfig()
 
-    def _is_slide_application(self, producer: Optional[str], creator: Optional[str]) -> bool:
+    def _is_slide_application(self, metadata: dict) -> tuple[bool, str]:
         """Detecta si el PDF fue creado desde una aplicación de slides."""
-        if not producer and not creator:
-            return False
-
-        slide_apps = [
-            'powerpoint', 'microsoft office powerpoint', 'canva', 'google slides',
-            'prezi', 'keynote', 'libre office impress', 'openoffice impress'
+        # Indicadores de aplicaciones de slides
+        slide_indicators = [
+            # Microsoft PowerPoint
+            'microsoft office powerpoint', 'powerpoint', 'pptx', 'ppt',
+            # Google Slides
+            'google slides', 'docs.google.com',
+            # Canva
+            'canva', 'canva.com',
+            # Otros
+            'keynote', 'prezi', 'slides', 'presentation',
+            'libre office impress', 'openoffice impress'
         ]
 
-        producer_lower = (producer or '').lower()
-        creator_lower = (creator or '').lower()
+        # Obtener metadatos
+        creator = (metadata.get('creator') or metadata.get('Creator') or '').lower()
+        producer = (metadata.get('producer') or metadata.get('Producer') or '').lower()
+        title = (metadata.get('title') or metadata.get('Title') or '').lower()
+        subject = (metadata.get('subject') or metadata.get('Subject') or '').lower()
 
-        return any(app in producer_lower or app in creator_lower for app in slide_apps)
+        # Combinar toda la metadata en un string
+        all_metadata = f"{creator} {producer} {title} {subject}"
+
+        # Buscar indicadores en metadata
+        for indicator in slide_indicators:
+            if indicator in all_metadata:
+                return True, f"Detectado por metadata: {indicator}"
+
+        return False, "No detectado como aplicación de slides"
     
     def _convert_to_markdown(self, text: str) -> str:
         """Convert plain text to basic markdown format."""
@@ -79,21 +95,30 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
             # Obtener metadatos para validar si es PDF de slides
             meta = doc.metadata or {}
-            producer = meta.get("producer") or meta.get("Producer")
-            creator = meta.get("creator") or meta.get("Creator")
-
-            is_slide_pdf = self._is_slide_application(producer, creator)
+            is_slide_pdf, detection_reason = self._is_slide_application(meta)
             ignore_graphics = is_slide_pdf
 
-            print(f"Producer: {producer}, Creator: {creator}")
-            print(f"PDF de slides detectado: {is_slide_pdf}, ignore_graphics: {ignore_graphics}")
+            print(f"PDF de slides detectado: {is_slide_pdf}")
+            print(f"Razón: {detection_reason}")
+            print(f"ignore_graphics: {ignore_graphics}")
 
             for i in range(limit):
                 print(f"\rExtracting page {i+1}/{limit}...", end='', flush=True)
 
                 # Try pymupdf4llm first for markdown formatting
                 try:
-                    md_page_text = pymupdf4llm.to_markdown(doc, pages=[i], ignore_graphics=ignore_graphics)
+                    md_page_text = pymupdf4llm.to_markdown(
+                        doc,
+                        pages=[i],
+                        detect_bg_color=False,
+                        ignore_alpha=True,
+                        write_images=False,
+                        force_text=True,
+                        ignore_images=True,
+                        ignore_graphics=ignore_graphics,  # Dinámico según detección
+                        margins=0,
+                        use_glyphs=True
+                    )
                 except Exception as e:
                     print(f"\rERROR Page {i+1}/{limit} - pymupdf4llm error: {e}")
                     md_page_text = ""
@@ -113,8 +138,9 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                 
                 pages.append(md_page_text)
 
-            # El producer ya fue obtenido arriba para la validación
-            producer_final = producer if isinstance(producer, str) else None
+            # Obtener producer para compatibilidad con resultado
+            producer_final = meta.get("producer") or meta.get("Producer")
+            producer_final = producer_final if isinstance(producer_final, str) else None
 
             print(f"- {len(pages)} páginas extraídas (de {page_total})")
 

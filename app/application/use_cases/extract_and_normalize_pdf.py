@@ -27,6 +27,8 @@ class ExtractAndNormalizeOutput:
     page_count: int
     normalized_pages: Optional[List[str]] = None
     normalized_text: Optional[str] = None
+    # Add original extracted pages for detailed reporting
+    extracted_pages: Optional[List[str]] = None
 
 class ExtractAndNormalizePdf:
     def __init__(
@@ -63,6 +65,7 @@ class ExtractAndNormalizePdf:
                 page_count=ext.result.page_count,
                 normalized_text=text,
                 normalized_pages=None,
+                extracted_pages=pages,
             )
         else:
             norm_pages = self.normalizer.normalize_pages(pages)
@@ -85,4 +88,5 @@ class ExtractAndNormalizePdf:
                 page_count=ext.result.page_count,
                 normalized_pages=norm_pages,
                 normalized_text=None,
+                extracted_pages=pages,
             )

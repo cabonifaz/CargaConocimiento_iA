@@ -217,10 +217,15 @@ class TestMetadataGeneration:
 
         print(f"[EXTRACCION] {relative_path.name} -> {len(chunk_result.chunks)} chunks generados")
 
-        # 1. Save extraction report
+        # Now we can use the captured intermediate results for detailed reports!
+        print(f"[NORMALIZACION] Usando MdTextNormalizer para formato Markdown")
+
+        # 1. Save extraction report using captured extracted_pages
         extraction_dir = Path("reports/extraction")
         extraction_dir.mkdir(parents=True, exist_ok=True)
         extraction_report_path = extraction_dir / f"extraction-{filename}-{timestamp}.txt"
+
+        extracted_pages_data = chunk_result.extracted_pages or []
 
         with extraction_report_path.open("w", encoding="utf-8") as f:
             f.write(f"=== REPORTE DE EXTRACCIÓN ===\n")
@@ -228,14 +233,20 @@ class TestMetadataGeneration:
             f.write(f"Company ID: {company_id}\n")
             f.write(f"Area ID: {area_id}\n")
             f.write(f"Timestamp: {timestamp}\n")
-            f.write(f"Páginas extraídas: {chunk_result.page_count}\n")
-            f.write(f"Chunks generados: {len(chunk_result.chunks)}\n")
-            # Note: We can't show individual pages here since ExtractNormalizeChunkGlobalPdf doesn't return them separately
+            f.write(f"Páginas extraídas: {len(extracted_pages_data)}\n")
+            f.write(f"Total de caracteres: {sum(len(page) for page in extracted_pages_data)}\n\n")
 
-        # 2. Save normalization report (combined with chunking info)
+            for i, page in enumerate(extracted_pages_data, 1):
+                f.write(f"--- Página {i} ---\n")
+                f.write(page)
+                f.write("\n\n")
+
+        # 2. Save normalization report using captured normalized_pages
         normalization_dir = Path("reports/normalization")
         normalization_dir.mkdir(parents=True, exist_ok=True)
         normalization_report_path = normalization_dir / f"normalization-{filename}-{timestamp}.txt"
+
+        normalized_pages_data = chunk_result.normalized_pages or []
 
         with normalization_report_path.open("w", encoding="utf-8") as f:
             f.write(f"=== REPORTE DE NORMALIZACIÓN ===\n")
@@ -243,9 +254,13 @@ class TestMetadataGeneration:
             f.write(f"Company ID: {company_id}\n")
             f.write(f"Area ID: {area_id}\n")
             f.write(f"Timestamp: {timestamp}\n")
-            f.write(f"Páginas procesadas: {chunk_result.page_count}\n")
-            f.write(f"Chunks generados: {len(chunk_result.chunks)}\n")
-            f.write(f"Configuración: Extract → Normalize → Chunk (optimized single pass)\n\n")
+            f.write(f"Páginas normalizadas: {len(normalized_pages_data)}\n")
+            f.write(f"Total de caracteres: {sum(len(page) for page in normalized_pages_data)}\n\n")
+
+            for i, page in enumerate(normalized_pages_data, 1):
+                f.write(f"--- Página Normalizada {i} ---\n")
+                f.write(page)
+                f.write("\n\n")
 
         # 3. Save chunking report
         chunking_dir = Path("reports/chunking")
