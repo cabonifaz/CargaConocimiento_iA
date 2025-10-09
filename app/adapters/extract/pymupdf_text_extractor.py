@@ -91,6 +91,139 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
         return tables_by_page
 
+    def _extract_table_with_native_api(self, page, page_num: int) -> list:
+        """
+        Extrae tablas usando la API nativa de PyMuPDF que maneja mejor celdas combinadas.
+        Devuelve una lista de tablas en formato markdown con información adicional sobre merged cells.
+        """
+        tables = []
+
+        try:
+            # Buscar tablas en la página
+            tabs = page.find_tables()
+
+            if not tabs or not tabs.tables:
+                return []
+
+            for table_idx, table in enumerate(tabs.tables):
+                try:
+                    # Extraer datos de la tabla
+                    table_data = table.extract()
+
+                    if not table_data or len(table_data) < 2:
+                        continue
+
+                    # Verificar si hay celdas combinadas
+                    has_merged_cells = self._has_merged_cells(table)
+
+                    if has_merged_cells:
+                        # Para tablas con celdas combinadas, crear representación especial
+                        table_md = self._build_table_markdown_with_merged_info(table_data, table)
+                    else:
+                        # Tabla simple sin celdas combinadas
+                        table_md = self._build_simple_table_markdown(table_data)
+
+                    if table_md:
+                        tables.append(table_md)
+
+                except Exception as e:
+                    print(f"\nError procesando tabla {table_idx} en página {page_num+1}: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"\nError buscando tablas en página {page_num+1}: {e}")
+
+        return tables
+
+    def _has_merged_cells(self, table) -> bool:
+        """Detecta si una tabla tiene celdas combinadas."""
+        try:
+            # PyMuPDF proporciona información sobre merged cells a través del objeto tabla
+            for row_idx in range(table.row_count):
+                for col_idx in range(table.col_count):
+                    cell = table.cell(row_idx, col_idx)
+                    # Si una celda tiene rowspan > 1 o colspan > 1, hay merged cells
+                    if hasattr(cell, 'rowspan') and cell.rowspan > 1:
+                        return True
+                    if hasattr(cell, 'colspan') and cell.colspan > 1:
+                        return True
+        except:
+            pass
+        return False
+
+    def _build_table_markdown_with_merged_info(self, table_data: list, table) -> str:
+        """
+        Construye markdown de tabla con información sobre celdas combinadas.
+        Para celdas combinadas, repite el valor en todas las celdas afectadas.
+        """
+        if not table_data:
+            return ""
+
+        # Procesar filas
+        processed_data = []
+
+        # Mapear celdas combinadas
+        merged_map = {}
+        try:
+            for row_idx in range(table.row_count):
+                for col_idx in range(table.col_count):
+                    cell = table.cell(row_idx, col_idx)
+                    if hasattr(cell, 'rowspan') and hasattr(cell, 'colspan'):
+                        rowspan = getattr(cell, 'rowspan', 1)
+                        colspan = getattr(cell, 'colspan', 1)
+                        if rowspan > 1 or colspan > 1:
+                            merged_map[(row_idx, col_idx)] = {
+                                'rowspan': rowspan,
+                                'colspan': colspan,
+                                'value': table_data[row_idx][col_idx] if row_idx < len(table_data) and col_idx < len(table_data[row_idx]) else ""
+                            }
+        except:
+            # Si falla la detección, usar tabla simple
+            return self._build_simple_table_markdown(table_data)
+
+        # Construir tabla expandiendo celdas combinadas
+        for row_idx, row in enumerate(table_data):
+            processed_row = []
+            for col_idx, cell in enumerate(row):
+                # Verificar si esta celda es parte de una celda combinada
+                source_cell = None
+                for (m_row, m_col), info in merged_map.items():
+                    if (m_row <= row_idx < m_row + info['rowspan'] and
+                        m_col <= col_idx < m_col + info['colspan']):
+                        source_cell = info['value']
+                        break
+
+                if source_cell is not None:
+                    processed_row.append(source_cell)
+                else:
+                    processed_row.append(cell or "")
+
+            processed_data.append(processed_row)
+
+        return self._build_simple_table_markdown(processed_data)
+
+    def _build_simple_table_markdown(self, table_data: list) -> str:
+        """Construye markdown simple de tabla sin celdas combinadas."""
+        if not table_data or len(table_data) < 1:
+            return ""
+
+        md_lines = []
+
+        # Header (primera fila)
+        header = table_data[0]
+        md_lines.append("| " + " | ".join(str(cell or "").strip() for cell in header) + " |")
+
+        # Separador
+        md_lines.append("| " + " | ".join("---" for _ in header) + " |")
+
+        # Filas de datos
+        for row in table_data[1:]:
+            # Asegurar que la fila tenga el mismo número de columnas
+            row_cells = list(row) + [""] * (len(header) - len(row))
+            md_lines.append("| " + " | ".join(str(cell or "").strip() for cell in row_cells[:len(header)]) + " |")
+
+        return "\n".join(md_lines)
+
     def _extract_tables_from_content(self, content: str) -> list:
         """Extrae tablas markdown del contenido."""
         tables = []
@@ -180,6 +313,8 @@ class PyMuPDFTextExtractor(TextExtractorPort):
             for i in range(limit):
                 print(f"\rExtracting page {i+1}/{limit}...", end='', flush=True)
 
+                page = doc[i]
+
                 # Try pymupdf4llm first for markdown formatting
                 try:
                     md_page_text = pymupdf4llm.to_markdown(
@@ -197,10 +332,9 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                 except Exception as e:
                     print(f"\rERROR Page {i+1}/{limit} - pymupdf4llm error: {e}")
                     md_page_text = ""
-                
+
                 # If pymupdf4llm fails, convert regular text to basic markdown
                 if len(md_page_text.strip()) == 0:
-                    page = doc[i]
                     regular_text = page.get_text()
                     if len(regular_text.strip()) > 0:
                         # Convert plain text to basic markdown format
@@ -211,12 +345,20 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                 else:
                     print(f"\rExtracted page {i+1}/{limit} ({len(md_page_text)} chars)")
 
+                # Extraer tablas con API nativa (maneja mejor celdas combinadas)
+                native_tables = self._extract_table_with_native_api(page, i)
+
                 # Para PDFs de slides, agregar tablas si existen para esta página
                 if is_slide_pdf and i in tables_by_page:
                     tables_for_page = tables_by_page[i]
                     tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(tables_for_page)
                     md_page_text += tables_section
                     print(f" + {len(tables_for_page)} tabla(s) agregada(s)")
+                elif native_tables:
+                    # Para PDFs digitables, usar tablas extraídas con API nativa si existen
+                    tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(native_tables)
+                    md_page_text += tables_section
+                    print(f" + {len(native_tables)} tabla(s) nativa(s) agregada(s)")
 
                 pages.append(md_page_text)
 
