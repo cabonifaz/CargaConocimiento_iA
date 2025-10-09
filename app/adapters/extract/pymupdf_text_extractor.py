@@ -91,19 +91,22 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
         return tables_by_page
 
-    def _extract_table_with_native_api(self, page, page_num: int) -> list:
+    def _extract_table_with_native_api(self, page, page_num: int) -> tuple[list, list]:
         """
         Extrae tablas usando la API nativa de PyMuPDF que maneja mejor celdas combinadas.
-        Devuelve una lista de tablas en formato markdown con información adicional sobre merged cells.
+        Devuelve:
+        - Lista de tablas en formato markdown
+        - Lista de datos de tabla (para merge entre páginas)
         """
-        tables = []
+        tables_md = []
+        tables_data = []
 
         try:
             # Buscar tablas en la página
             tabs = page.find_tables()
 
             if not tabs or not tabs.tables:
-                return []
+                return [], []
 
             for table_idx, table in enumerate(tabs.tables):
                 try:
@@ -112,6 +115,13 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
                     if not table_data or len(table_data) < 2:
                         continue
+
+                    # Guardar datos estructurados para posible merge
+                    tables_data.append({
+                        'data': table_data,
+                        'has_merged_cells': self._has_merged_cells(table),
+                        'table_obj': table
+                    })
 
                     # Verificar si hay celdas combinadas
                     has_merged_cells = self._has_merged_cells(table)
@@ -124,7 +134,7 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                         table_md = self._build_simple_table_markdown(table_data)
 
                     if table_md:
-                        tables.append(table_md)
+                        tables_md.append(table_md)
 
                 except Exception as e:
                     print(f"\nError procesando tabla {table_idx} en página {page_num+1}: {e}")
@@ -133,7 +143,7 @@ class PyMuPDFTextExtractor(TextExtractorPort):
         except Exception as e:
             print(f"\nError buscando tablas en página {page_num+1}: {e}")
 
-        return tables
+        return tables_md, tables_data
 
     def _has_merged_cells(self, table) -> bool:
         """Detecta si una tabla tiene celdas combinadas."""
@@ -224,6 +234,159 @@ class PyMuPDFTextExtractor(TextExtractorPort):
 
         return "\n".join(md_lines)
 
+    def _can_merge_tables(self, table1_data: list, table2_data: list) -> bool:
+        """
+        Determina si dos tablas pueden ser unidas (tabla dividida entre páginas).
+        Criterios:
+        - La tabla 2 NO tiene header (o tiene header similar a tabla 1)
+        - Mismo número de columnas
+        - La última fila de tabla 1 y primera de tabla 2 no parecen ser headers
+        """
+        if not table1_data or not table2_data:
+            return False
+
+        if len(table1_data) < 1 or len(table2_data) < 1:
+            return False
+
+        # Obtener headers
+        header1 = table1_data[0]
+        header2 = table2_data[0]
+
+        # Mismo número de columnas
+        if len(header1) != len(header2):
+            return False
+
+        # Si los headers son idénticos o muy similares, probablemente sea continuación
+        header1_normalized = [str(cell or "").strip().lower() for cell in header1]
+        header2_normalized = [str(cell or "").strip().lower() for cell in header2]
+
+        if header1_normalized == header2_normalized:
+            return True
+
+        # Si la segunda tabla no parece tener header (primera fila parece datos)
+        # Verificar si la segunda fila de tabla2 es diferente del patrón de header
+        if len(table2_data) > 1:
+            # Headers típicamente tienen palabras, no solo números
+            is_likely_data = all(
+                str(cell or "").strip().replace(".", "").replace(",", "").isdigit()
+                for cell in header2 if str(cell or "").strip()
+            )
+            if is_likely_data:
+                return True
+
+        return False
+
+    def _merge_table_data(self, table1_data: list, table2_data: list) -> list:
+        """
+        Une dos tablas que están divididas entre páginas.
+        Asume que table2 es la continuación de table1.
+        """
+        merged = table1_data.copy()
+
+        # Si table2 tiene el mismo header, saltarlo
+        if len(table2_data) > 0:
+            header1_normalized = [str(cell or "").strip().lower() for cell in table1_data[0]]
+            header2_normalized = [str(cell or "").strip().lower() for cell in table2_data[0]]
+
+            if header1_normalized == header2_normalized:
+                # Saltar el header de la segunda tabla
+                merged.extend(table2_data[1:])
+            else:
+                # La segunda tabla no tiene header repetido, agregar todo
+                merged.extend(table2_data)
+
+        return merged
+
+    def _merge_split_tables_across_pages(
+        self,
+        all_pages_data: list,
+        is_slide_pdf: bool,
+        tables_by_page: dict
+    ) -> list:
+        """
+        Post-procesa todas las páginas para unir tablas divididas entre páginas consecutivas.
+        Returns: Lista de páginas con tablas mergeadas donde corresponda.
+        """
+        pages = []
+        i = 0
+
+        while i < len(all_pages_data):
+            page_num, md_page_text, native_tables_md, native_tables_data = all_pages_data[i]
+
+            # Verificar si hay tabla en esta página y en la siguiente
+            if i + 1 < len(all_pages_data) and native_tables_data:
+                next_page_num, next_md_text, next_tables_md, next_tables_data = all_pages_data[i + 1]
+
+                # Intentar merge si hay tablas en ambas páginas
+                if next_tables_data and len(native_tables_data) > 0 and len(next_tables_data) > 0:
+                    # Verificar si la última tabla de esta página puede unirse con la primera de la siguiente
+                    last_table = native_tables_data[-1]
+                    first_next_table = next_tables_data[0]
+
+                    if self._can_merge_tables(last_table['data'], first_next_table['data']):
+                        print(f"\n✓ Detectada tabla dividida entre páginas {page_num+1} y {next_page_num+1}")
+
+                        # Merge de datos
+                        merged_data = self._merge_table_data(last_table['data'], first_next_table['data'])
+
+                        # Generar markdown de tabla mergeada
+                        if last_table['has_merged_cells'] or first_next_table['has_merged_cells']:
+                            # Si alguna tiene merged cells, usar el objeto de tabla (tomamos el primero)
+                            merged_md = self._build_table_markdown_with_merged_info(
+                                merged_data,
+                                last_table['table_obj']
+                            )
+                        else:
+                            merged_md = self._build_simple_table_markdown(merged_data)
+
+                        # Actualizar tablas de la página actual (reemplazar última tabla por la mergeada)
+                        updated_tables_md = native_tables_md[:-1] + [merged_md]
+
+                        # Actualizar tablas de la siguiente página (remover primera tabla)
+                        next_updated_tables_md = next_tables_md[1:] if len(next_tables_md) > 1 else []
+
+                        # Agregar tablas a la página actual
+                        if is_slide_pdf and page_num in tables_by_page:
+                            tables_for_page = tables_by_page[page_num]
+                            tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(tables_for_page)
+                            md_page_text += tables_section
+                        elif updated_tables_md:
+                            tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(updated_tables_md)
+                            md_page_text += tables_section
+
+                        pages.append(md_page_text)
+
+                        # Actualizar siguiente página con tablas restantes
+                        if is_slide_pdf and next_page_num in tables_by_page:
+                            tables_for_page = tables_by_page[next_page_num]
+                            tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(tables_for_page)
+                            next_md_text += tables_section
+                        elif next_updated_tables_md:
+                            tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(next_updated_tables_md)
+                            next_md_text += tables_section
+
+                        pages.append(next_md_text)
+
+                        # Saltar siguiente página (ya procesada)
+                        i += 2
+                        continue
+
+            # No hay merge, procesar página normalmente
+            if is_slide_pdf and page_num in tables_by_page:
+                tables_for_page = tables_by_page[page_num]
+                tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(tables_for_page)
+                md_page_text += tables_section
+                print(f"\rPage {page_num+1}: + {len(tables_for_page)} tabla(s) agregada(s)", end='', flush=True)
+            elif native_tables_md:
+                tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(native_tables_md)
+                md_page_text += tables_section
+                print(f"\rPage {page_num+1}: + {len(native_tables_md)} tabla(s) nativa(s) agregada(s)", end='', flush=True)
+
+            pages.append(md_page_text)
+            i += 1
+
+        return pages
+
     def _extract_tables_from_content(self, content: str) -> list:
         """Extrae tablas markdown del contenido."""
         tables = []
@@ -310,6 +473,9 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                 print("Extrayendo tablas adicionales para PDF de slides...")
                 tables_by_page = self._extract_tables_from_slides(doc, limit)
 
+            # Almacenamiento temporal para merge de tablas entre páginas
+            all_pages_table_data = []  # [(page_num, tables_md, tables_data), ...]
+
             for i in range(limit):
                 print(f"\rExtracting page {i+1}/{limit}...", end='', flush=True)
 
@@ -346,21 +512,14 @@ class PyMuPDFTextExtractor(TextExtractorPort):
                     print(f"\rExtracted page {i+1}/{limit} ({len(md_page_text)} chars)")
 
                 # Extraer tablas con API nativa (maneja mejor celdas combinadas)
-                native_tables = self._extract_table_with_native_api(page, i)
+                native_tables_md, native_tables_data = self._extract_table_with_native_api(page, i)
 
-                # Para PDFs de slides, agregar tablas si existen para esta página
-                if is_slide_pdf and i in tables_by_page:
-                    tables_for_page = tables_by_page[i]
-                    tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(tables_for_page)
-                    md_page_text += tables_section
-                    print(f" + {len(tables_for_page)} tabla(s) agregada(s)")
-                elif native_tables:
-                    # Para PDFs digitables, usar tablas extraídas con API nativa si existen
-                    tables_section = "\n\n## Tablas de la página\n\n" + "\n\n".join(native_tables)
-                    md_page_text += tables_section
-                    print(f" + {len(native_tables)} tabla(s) nativa(s) agregada(s)")
+                # Guardar para procesamiento posterior
+                all_pages_table_data.append((i, md_page_text, native_tables_md, native_tables_data))
 
-                pages.append(md_page_text)
+            # Post-procesar: merge de tablas divididas entre páginas
+            print("\n\nPost-procesando tablas divididas entre páginas...")
+            pages = self._merge_split_tables_across_pages(all_pages_table_data, is_slide_pdf, tables_by_page)
 
             # Obtener producer para compatibilidad con resultado
             producer_final = meta.get("producer") or meta.get("Producer")
