@@ -11,6 +11,7 @@ from app.application.use_cases.extract_text_from_pdf import (
 )
 from app.domain.services.text_normalizer import TextNormalizer, NormalizerConfig
 from app.domain.services.md_text_normalizer import MdTextNormalizer, MdNormalizerConfig
+from app.domain.services.ocr_md_text_normalizer import OcrMdTextNormalizer
 
 @dataclass
 class ExtractAndNormalizeInput:
@@ -42,7 +43,9 @@ class ExtractAndNormalizePdf:
         self.normalizer = normalizer or TextNormalizer()
 
     def execute(self, params: ExtractAndNormalizeInput) -> ExtractAndNormalizeOutput:
-        if isinstance(self.normalizer, MdTextNormalizer):
+        if isinstance(self.normalizer, OcrMdTextNormalizer):
+            print("[NORMALIZACION] Usando OcrMdTextNormalizer para Mistral OCR markdown")
+        elif isinstance(self.normalizer, MdTextNormalizer):
             print("[NORMALIZACION] Usando MdTextNormalizer para formato Markdown")
         # 1) extrae
         ext = self.extract_uc.execute(

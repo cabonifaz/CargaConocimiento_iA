@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     BEDROCK_BATCH_SIZE: int = 64
     BEDROCK_TIMEOUT_SECS: int = 30
 
+    MISTRAL_API_KEY: Optional[str] = None
+    MISTRAL_MODEL: str = "mistral-ocr-latest"
+
     WEAVIATE_URL: Optional[str] = None
     WEAVIATE_API_KEY: Optional[str] = None
     WEAVIATE_COLLECTION: str = "ManualChunks"
