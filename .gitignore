@@ -12,3 +12,5 @@ report/
 .vscode/
 reports/
 *.local.*
+*.zip
+lambda_layer/
