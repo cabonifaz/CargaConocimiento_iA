@@ -2,6 +2,7 @@ import re
 import json
 import hashlib
 import logging
+import bisect
 from typing import List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
@@ -33,14 +34,40 @@ class SemanticChunker:
         self.min_tokens = min_tokens
         self.max_chars = max_chars
         self.tokenizer = SimpleTokenizer()
+        self.page_separator = "\n\n---PÁGINA---\n\n"
 
-    def chunk(self, text: str, filename: str = "document.pdf") -> List[Dict[str, Any]]:
-        """Creates semantic chunks from text."""
-        blocks = self._parse_blocks(text)
+    def chunk_document(self, pages: List[str], filename: str = "document.pdf") -> List[Dict[str, Any]]:
+        """Creates semantic chunks from pages (like CLI)."""
+        full_text, page_offsets = self._join_pages(pages)
+        blocks = self._parse_blocks(full_text)
         chunks = []
-        chunks.extend(self._create_table_chunks(blocks))
-        chunks.extend(self._create_content_chunks(text, blocks))
+        chunks.extend(self._create_table_chunks(blocks, page_offsets))
+        chunks.extend(self._create_content_chunks(full_text, blocks, page_offsets))
         return chunks
+
+    def _join_pages(self, pages: List[str]) -> Tuple[str, List[int]]:
+        """Join pages and track offsets."""
+        offsets = []
+        parts = []
+        pos = 0
+
+        for i, page in enumerate(pages):
+            offsets.append(pos)
+            parts.append(page)
+            pos += len(page)
+            if i != len(pages) - 1:
+                parts.append(self.page_separator)
+                pos += len(self.page_separator)
+
+        return "".join(parts), offsets
+
+    def _get_pages_for_span(self, page_offsets: List[int], start_char: int, end_char: int) -> Tuple[int, int]:
+        """Get page numbers for character span."""
+        ps = bisect.bisect_right(page_offsets, start_char) - 1
+        ps = max(ps, 0)
+        pe = bisect.bisect_right(page_offsets, max(end_char - 1, 0)) - 1
+        pe = max(pe, 0)
+        return ps + 1, pe + 1
 
     def _parse_blocks(self, text: str) -> List[Dict[str, Any]]:
         """Parses text into semantic blocks."""
@@ -114,7 +141,7 @@ class SemanticChunker:
         hierarchy.append(heading)
         return hierarchy[:6]
 
-    def _create_table_chunks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _create_table_chunks(self, blocks: List[Dict[str, Any]], page_offsets: List[int]) -> List[Dict[str, Any]]:
         """Creates JSON chunks for tables."""
         chunks = []
         for block in blocks:
@@ -126,6 +153,8 @@ class SemanticChunker:
                     chunk_text = f"{hierarchy_header}\n{json_content}" if hierarchy_header else json_content
                     fragments = self._split_oversized(chunk_text)
 
+                    page_start, page_end = self._get_pages_for_span(page_offsets, block['start'], block['end'])
+
                     for i, fragment in enumerate(fragments):
                         chunks.append({
                             'text': fragment,
@@ -133,6 +162,8 @@ class SemanticChunker:
                             'chunk_id': self._hash(f"{fragment}_{i}"),
                             'char_start': block['start'],
                             'char_end': block['end'],
+                            'page_start': page_start,
+                            'page_end': page_end,
                             'type': 'table_json'
                         })
                 except Exception as e:
@@ -197,7 +228,7 @@ class SemanticChunker:
         json_str = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
         return f"```json\n{json_str}\n```"
 
-    def _create_content_chunks(self, text: str, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _create_content_chunks(self, text: str, blocks: List[Dict[str, Any]], page_offsets: List[int]) -> List[Dict[str, Any]]:
         """Creates content chunks with 15% overlap."""
         chunks = []
         current_pos = 0
@@ -215,6 +246,8 @@ class SemanticChunker:
             enhanced_text = f"{hierarchy_header}\n{chunk_text}" if hierarchy_header else chunk_text
             fragments = self._split_oversized(enhanced_text)
 
+            page_start, page_end = self._get_pages_for_span(page_offsets, chunk_start, chunk_end)
+
             for i, fragment in enumerate(fragments):
                 token_count = self.tokenizer.count_tokens(fragment)
                 if token_count < self.min_tokens and not fragments[i+1:]:
@@ -226,6 +259,8 @@ class SemanticChunker:
                     'chunk_id': self._hash(f"{fragment}_{i}"),
                     'char_start': chunk_start,
                     'char_end': chunk_end,
+                    'page_start': page_start,
+                    'page_end': page_end,
                     'type': 'content'
                 })
 

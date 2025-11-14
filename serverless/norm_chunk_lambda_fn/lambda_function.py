@@ -12,24 +12,24 @@ logger.setLevel(logging.INFO)
 def lambda_handler(event: Dict[str, Any], context: Any) -> list:
 
     try:
-        markdown_text = event.get('markdown_text', '')
+        pages = event.get('pages', [])
         filename = event.get('filename', 'document.pdf')
         target_tokens = event.get('target_tokens', 400)
         min_tokens = event.get('min_tokens', 50)
         enable_quality_filter = event.get('enable_quality_filter', True)
 
-        if not markdown_text:
-            logger.warning("No markdown_text provided in event")
-            raise ValueError("markdown_text is required")
+        if not pages:
+            logger.warning("No pages provided in event")
+            raise ValueError("pages array is required")
 
-        logger.info(f"Processing file: {filename}, text length: {len(markdown_text)}")
+        logger.info(f"Processing file: {filename}, pages: {len(pages)}")
 
         normalizer = MarkdownNormalizer()
-        normalized_text = normalizer.normalize(markdown_text)
-        logger.info(f"Text normalized, length: {len(normalized_text)}")
+        normalized_pages = [normalizer.normalize(page) for page in pages]
+        logger.info(f"Pages normalized: {len(normalized_pages)}")
 
         chunker = SemanticChunker(target_tokens=target_tokens, min_tokens=min_tokens)
-        all_chunks = chunker.chunk(normalized_text, filename)
+        all_chunks = chunker.chunk_document(normalized_pages, filename)
         logger.info(f"Initial chunks created: {len(all_chunks)}")
 
         if enable_quality_filter:
