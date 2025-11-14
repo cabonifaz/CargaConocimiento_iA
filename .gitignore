@@ -14,3 +14,23 @@ reports/
 *.local.*
 *.zip
 lambda_layer/
+
+# Python
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+ENV/
+
+# IDE
+*.swp
+*.swo
+*~
+
+# Output
+output/
+*.txt
+
+# Logs
+*.log
