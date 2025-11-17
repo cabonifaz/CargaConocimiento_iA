@@ -34,7 +34,7 @@ class SemanticChunker:
         self.min_tokens = min_tokens
         self.max_chars = max_chars
         self.tokenizer = SimpleTokenizer()
-        self.page_separator = "\n\n---PÁGINA---\n\n"
+        self.page_separator = "\n\n\f\n\n"  # Form feed character, matches CLI behavior
 
     def chunk_document(self, pages: List[str], filename: str = "document.pdf") -> List[Dict[str, Any]]:
         """Creates semantic chunks from pages (like CLI)."""

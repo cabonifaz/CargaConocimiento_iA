@@ -88,6 +88,14 @@ aws lambda update-function-code \
 
 ## n8n Workflow Configuration
 
+### Complete Pipeline
+
+```
+Mistral OCR → norm_chunk_lambda_fn → embed_upsert_lambda_fn → Success
+```
+
+This Lambda (norm_chunk_lambda_fn) is the first step. The output chunks are then processed by `embed_upsert_lambda_fn` which handles embeddings and Weaviate upsert.
+
 ### 1. Mistral OCR Node (Extract & Split Pages)
 
 The Mistral OCR node must output pages as an array:
@@ -105,7 +113,7 @@ The Mistral OCR node must output pages as an array:
 
 **Important**: Configure Mistral OCR to return **individual pages** as an array, not combined text.
 
-### 2. AWS Lambda Node
+### 2. AWS Lambda Node (norm_chunk_lambda_fn)
 
 **Credentials**: AWS access keys with `lambda:InvokeFunction` permission
 
@@ -119,58 +127,57 @@ The Mistral OCR node must output pages as an array:
 }
 ```
 
-The Lambda returns an array of chunks. n8n automatically splits this into individual items.
+**Output**: Array of chunks with all metadata needed for embedding and upsert.
 
-### 3. Loop Over Items Node
+### 3. AWS Lambda Node (embed_upsert_lambda_fn)
 
-After the Lambda node, the chunks are already individual items in n8n. Use **Loop Over Items** to process each chunk.
+This Lambda receives the chunks from the previous step and handles:
+- Embedding generation (Bedrock Cohere)
+- Weaviate upsert with complete metadata
 
-### 4. Amazon Bedrock Embeddings Node
+**Function**: `embed-upsert-processor`
 
-For each chunk item:
-
-**Model**: `cohere.embed-multilingual-v3`
-
-**Input Text**: `{{ $json.text }}`
-
-**Input Type**: `search_document`
-
-This generates embeddings for the chunk text.
-
-### 5. Weaviate Insert Node
-
-Combine chunk metadata with embeddings:
-
-**Class**: `Documents`
-
-**ID**: `{{ $json.chunk_id }}`
-
-**Properties**:
+**Payload**:
 ```json
 {
-  "text": "{{ $json.text }}",
-  "filename": "{{ $json.filename }}",
-  "chunk_index": {{ $json.chunk_index }},
-  "token_count": {{ $json.token_count }},
-  "chunk_type": "{{ $json.type }}",
-  "char_start": {{ $json.char_start }},
-  "char_end": {{ $json.char_end }},
-  "page_start": {{ $json.page_start }},
-  "page_end": {{ $json.page_end }}
+  "chunks": "{{ $json }}",
+  "company_id": "304",
+  "area_id": "1"
 }
 ```
 
-**Vector**: `{{ $json.embedding }}`
+**Note**: Only 3 fields required. Everything else is auto-derived:
+- `doc_id`: Extracted from `filename` field in chunks (without .pdf)
+- `doc_title`: Same as `doc_id`
+- `collection_name`: Always `company_id`
+- `embedding_model`: From environment variable
 
-Note: The `embedding` field comes from the Bedrock node output. The `page_start` and `page_end` fields indicate which pages the chunk spans.
+**Output**:
+```json
+{
+  "chunks_written": 42,
+  "collection_name": "304",
+  "doc_id": "documento_123",
+  "company_id": "304",
+  "area_id": "1"
+}
+```
+
+See `serverless/embed_upsert_lambda_fn/README.md` for details on the second Lambda.
 
 ## Processing Flow
 
 ```
-Mistral OCR (pages array) → Lambda (normalize + chunk) → Bedrock Embeddings → Weaviate
+Mistral OCR (pages array)
+    ↓
+norm_chunk_lambda_fn (normalize + chunk + quality filter)
+    ↓ (chunks array)
+embed_upsert_lambda_fn (embeddings + weaviate upsert)
+    ↓
+Success
 ```
 
-The Lambda receives pages as an array (like the CLI), joins them with offsets, and calculates `page_start`/`page_end` for each chunk.
+This Lambda receives pages as an array (like the CLI), joins them with offsets, and calculates `page_start`/`page_end` for each chunk.
 
 ## Features
 
@@ -200,11 +207,13 @@ View logs in CloudWatch:
 aws logs tail /aws/lambda/norm-chunk-processor --follow
 ```
 
-## Key Differences from n8n Node Code
+## CLI Behavior Replication
 
-This Lambda replicates the **exact CLI behavior**:
+This Lambda replicates the **exact CLI behavior** of `ocr-upsert-company-files`:
 - Receives **pages array** (not combined text)
-- Joins pages with separator `\n\n---PÁGINA---\n\n`
-- Tracks page offsets
+- Joins pages with separator `\n\n\f\n\n` (form feed character, same as CLI)
+- Tracks page offsets for accurate page mapping
 - Calculates `page_start` and `page_end` for each chunk using `bisect`
+- Uses semantic chunker with 15% overlap
+- Applies quality filters with same thresholds
 - Identical normalization and chunking logic
