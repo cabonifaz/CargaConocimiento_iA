@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import List
 
-
 @dataclass(frozen=True)
 class WeaviateChunkMetadata:
     """Metadata model for chunks stored in Weaviate following the schema structure."""
