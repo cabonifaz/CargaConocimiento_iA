@@ -59,12 +59,23 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         aws_region = os.environ.get('AWS_REGION', 'us-east-1')
         bedrock_region = os.environ.get('BEDROCK_REGION', aws_region)
 
-        # Get Weaviate configuration from environment
-        weaviate_url = os.environ.get('WEAVIATE_URL')
-        weaviate_api_key = os.environ.get('WEAVIATE_API_KEY')
+        # Get Weaviate configuration based on ENVIRONMENT
+        environment = os.environ.get('ENVIRONMENT', 'staging')
+        logger.info(f"Running in environment: {environment}")
+        
+        if environment == 'preprod':
+            weaviate_url = os.environ.get('WEAVIATE_URL')
+            weaviate_api_key = os.environ.get('WEAVIATE_API_KEY')
+        else:
+            weaviate_url = os.environ.get('WEAVIATE_URL_STAGING')
+            weaviate_api_key = os.environ.get('WEAVIATE_API_KEY_STAGING')
 
         if not weaviate_url or not weaviate_api_key:
-            raise RuntimeError("WEAVIATE_URL and WEAVIATE_API_KEY environment variables are required")
+            raise RuntimeError(
+                f"Weaviate configuration missing for environment '{environment}'. "
+                f"Required variables: WEAVIATE_URL{'_STAGING' if environment != 'preprod' else ''} "
+                f"and WEAVIATE_API_KEY{'_STAGING' if environment != 'preprod' else ''}"
+            )
 
         # Initialize embedder
         embedder = BedrockCohereEmbedder(
