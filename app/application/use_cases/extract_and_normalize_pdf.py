@@ -11,6 +11,7 @@ from app.application.use_cases.extract_text_from_pdf import (
 )
 from app.domain.services.text_normalizer import TextNormalizer, NormalizerConfig
 from app.domain.services.md_text_normalizer import MdTextNormalizer, MdNormalizerConfig
+from app.domain.services.ocr_md_text_normalizer import OcrMdTextNormalizer
 
 @dataclass
 class ExtractAndNormalizeInput:
@@ -27,6 +28,8 @@ class ExtractAndNormalizeOutput:
     page_count: int
     normalized_pages: Optional[List[str]] = None
     normalized_text: Optional[str] = None
+    # Add original extracted pages for detailed reporting
+    extracted_pages: Optional[List[str]] = None
 
 class ExtractAndNormalizePdf:
     def __init__(
@@ -40,8 +43,10 @@ class ExtractAndNormalizePdf:
         self.normalizer = normalizer or TextNormalizer()
 
     def execute(self, params: ExtractAndNormalizeInput) -> ExtractAndNormalizeOutput:
-        if isinstance(self.normalizer, MdTextNormalizer):
-            print("📝 [NORMALIZACIÓN] Usando MdTextNormalizer para formato Markdown")
+        if isinstance(self.normalizer, OcrMdTextNormalizer):
+            print("[NORMALIZACION] Usando OcrMdTextNormalizer para Mistral OCR markdown")
+        elif isinstance(self.normalizer, MdTextNormalizer):
+            print("[NORMALIZACION] Usando MdTextNormalizer para formato Markdown")
         # 1) extrae
         ext = self.extract_uc.execute(
             ExtractTextInput(relative_path=params.relative_path, max_pages=params.max_pages, generate_report=params.generate_report)
@@ -63,6 +68,7 @@ class ExtractAndNormalizePdf:
                 page_count=ext.result.page_count,
                 normalized_text=text,
                 normalized_pages=None,
+                extracted_pages=pages,
             )
         else:
             norm_pages = self.normalizer.normalize_pages(pages)
@@ -85,4 +91,5 @@ class ExtractAndNormalizePdf:
                 page_count=ext.result.page_count,
                 normalized_pages=norm_pages,
                 normalized_text=None,
+                extracted_pages=pages,
             )

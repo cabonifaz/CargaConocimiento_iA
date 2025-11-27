@@ -1,10 +1,13 @@
 import argparse
 from pathlib import Path
 
+from mistralai import Mistral
+
 from app.adapters.blob.local_fs import LocalFileSystemBlob
 from app.adapters.extract.pymupdf_text_extractor import PyMuPDFTextExtractor
+from app.adapters.extract.mistralocr_text_extractor import MistralOCRTextExtractor
 from app.adapters.tokenizer.simple_regex_tokenizer import SimpleRegexTokenizer
-from app.adapters.embedding.bedrock_titan_embedder import BedrockTitanEmbedder
+from app.adapters.embedding.bedrock_cohere_embed_multilingual import BedrockCohereEmbedMultilingual
 from app.adapters.vector_store.weaviate_store import WeaviateVectorStore
 
 from app.application.use_cases.extract_text_from_pdf import (
@@ -31,13 +34,29 @@ from app.application.use_cases.embed_and_upsert_company_pdfs import (
 from app.application.use_cases.embed_and_upsert_files_with_metadata import (
     EmbedAndUpsertFilesWithMetadata, EmbedAndUpsertFilesWithMetadataInput
 )
+from app.application.use_cases.ocr_embed_and_upsert_files_with_metadata import (
+    OcrEmbedAndUpsertFilesWithMetadata, OcrEmbedAndUpsertFilesWithMetadataInput
+)
+from app.application.use_cases.test_metadata_generation import (
+    TestMetadataGeneration, TestMetadataGenerationInput
+)
 from app.domain.services.md_text_normalizer import MdTextNormalizer
+from app.domain.services.ocr_md_text_normalizer import OcrMdTextNormalizer
 from app.ports.outbound.chunker import ChunkerConfig
 from app.adapters.chunker.chunk_global import ChunkGlobalAdapter
 from app.adapters.chunker.chunk_global_md import ChunkGlobalMdAdapter
 from app.adapters.chunker.chunk_semantic import ChunkSemanticAdapter
+from app.adapters.chunker.chunk_semantic_optimized import ChunkSemanticOptimizedAdapter
 from app.domain.services.chunk_quality import QualityConfig
 from app.config.settings import settings
+
+
+def create_semantic_chunker(tokenizer, config, use_optimized=True):
+    """Create semantic chunker - optimized version by default."""
+    if use_optimized:
+        return ChunkSemanticOptimizedAdapter(tokenizer, config)
+    else:
+        return ChunkSemanticAdapter(tokenizer, config)
 
 
 def main():
@@ -64,8 +83,8 @@ def main():
     gchunk = sub.add_parser("chunk-global", help="Extraer, normalizar y chunkear GLOBAL un PDF")
     gchunk.add_argument("relative_path", type=str)
     gchunk.add_argument("--max-pages", type=int, default=None)
-    gchunk.add_argument("--target", type=int, default=512, help="tokens por chunk")
-    gchunk.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
+    gchunk.add_argument("--target", type=int, default=400, help="tokens por chunk")
+    gchunk.add_argument("--overlap", type=int, default=60, help="tokens de solapamiento")
     gchunk.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
     gchunk.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
     
@@ -73,17 +92,17 @@ def main():
     gchunkmd = sub.add_parser("chunk-global-md", help="Extraer, normalizar y chunkear GLOBAL un PDF")
     gchunkmd.add_argument("relative_path", type=str)
     gchunkmd.add_argument("--max-pages", type=int, default=None)
-    gchunkmd.add_argument("--target", type=int, default=512, help="tokens por chunk")
-    gchunkmd.add_argument("--overlap", type=int, default=64, help="tokens de solapamiento")
+    gchunkmd.add_argument("--target", type=int, default=400, help="tokens por chunk")
+    gchunkmd.add_argument("--overlap", type=int, default=60, help="tokens de solapamiento")
     gchunkmd.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
     gchunkmd.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
     gchunkmd.add_argument("--generate-report", action="store_true", help="Generar reporte de extracción y normalización")
     
     # --- chunk-semantic (1 archivo) - NEW DEFAULT ---
-    gsem = sub.add_parser("chunk-semantic", help="Chunking SEMÁNTICO con 25% overlap (RECOMENDADO)")
+    gsem = sub.add_parser("chunk-semantic", help="Chunking SEMÁNTICO con 15% overlap (RECOMENDADO)")
     gsem.add_argument("relative_path", type=str)
     gsem.add_argument("--max-pages", type=int, default=None)
-    gsem.add_argument("--target", type=int, default=512, help="tokens por chunk")
+    gsem.add_argument("--target", type=int, default=400, help="tokens por chunk")
     gsem.add_argument("--min-toks", type=int, default=50, help="umbral mínimo de tokens")
     gsem.add_argument("--sep", type=str, default="\n\n\f\n\n", help="separador entre páginas en el texto unido")
     gsem.add_argument("--generate-report", action="store_true", help="Generar reporte de extracción y normalización")
@@ -93,8 +112,8 @@ def main():
     gall.add_argument("--max-pages", type=int, default=None)
     gall.add_argument("--non-recursive", action="store_true")
     # params de chunker
-    gall.add_argument("--target", type=int, default=512)
-    gall.add_argument("--overlap", type=int, default=64)
+    gall.add_argument("--target", type=int, default=400)
+    gall.add_argument("--overlap", type=int, default=60)
     gall.add_argument("--min-toks", type=int, default=50)
     gall.add_argument("--sep", type=str, default="\n\n\f\n\n")
     # quality gates
@@ -109,8 +128,8 @@ def main():
     embed = sub.add_parser("embed-dry", help="Pipeline hasta embeddings (sin upsert)")
     embed.add_argument("relative_path", type=str)
     embed.add_argument("--max-pages", type=int, default=None)
-    embed.add_argument("--target", type=int, default=512)
-    embed.add_argument("--overlap", type=int, default=64)
+    embed.add_argument("--target", type=int, default=400)
+    embed.add_argument("--overlap", type=int, default=60)
     embed.add_argument("--min-toks", type=int, default=50)
     embed.add_argument("--sep", type=str, default="\n\n\f\n\n")
     embed.add_argument("--q-min-toks", type=int, default=50)
@@ -122,8 +141,8 @@ def main():
     ew = sub.add_parser("embed-weaviate", help="Embed + upsert BYOV en Weaviate (un PDF)")
     ew.add_argument("relative_path", type=str)
     ew.add_argument("--max-pages", type=int, default=None)
-    ew.add_argument("--target", type=int, default=512)
-    ew.add_argument("--overlap", type=int, default=64)
+    ew.add_argument("--target", type=int, default=400)
+    ew.add_argument("--overlap", type=int, default=60)
     ew.add_argument("--min-toks", type=int, default=50)
     ew.add_argument("--sep", type=str, default="\n\n\f\n\n")
     ew.add_argument("--q-min-toks", type=int, default=50)
@@ -138,8 +157,8 @@ def main():
     ewc = sub.add_parser("embed-weaviate-company", help="Embed + upsert todos los PDFs de una carpeta de empresa")
     ewc.add_argument("company_id", type=str, help="Nombre de la carpeta de la empresa (será usado como company_id y collection)")
     ewc.add_argument("--max-pages", type=int, default=None)
-    ewc.add_argument("--target", type=int, default=512)
-    ewc.add_argument("--overlap", type=int, default=64)
+    ewc.add_argument("--target", type=int, default=400)
+    ewc.add_argument("--overlap", type=int, default=60)
     ewc.add_argument("--min-toks", type=int, default=50)
     ewc.add_argument("--sep", type=str, default="\n\n\f\n\n")
     ewc.add_argument("--q-min-toks", type=int, default=50)
@@ -149,18 +168,32 @@ def main():
     ewc.add_argument("--generate-report", action="store_true", help="Generar reportes de extracción, normalización y chunking")
 
     # --- upsert-company-files (archivos de company_files/files/ con metadata personalizada) ---
-    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area personalizados")
-    ucf.add_argument("company_name", type=str, help="Nombre de la empresa (usado como company_id y nombre de colección)")
-    ucf.add_argument("area_name", type=str, help="Nombre del área (metadata area)")
+    ucf = sub.add_parser("upsert-company-files", help="Procesar archivos de company_files/files/ con company_id y area_id string (sin espacios)")
+    ucf.add_argument("company_id", type=str, help="ID string de la empresa sin espacios (ej: '304' o 'company-a')")
+    ucf.add_argument("area_id", type=str, help="ID string del área sin espacios (ej: '1' o 'legal')")
     ucf.add_argument("--max-pages", type=int, default=None)
-    ucf.add_argument("--target", type=int, default=512)
-    ucf.add_argument("--overlap", type=int, default=64)
+    ucf.add_argument("--target", type=int, default=400)
+    ucf.add_argument("--overlap", type=int, default=60)
     ucf.add_argument("--min-toks", type=int, default=50)
     ucf.add_argument("--sep", type=str, default="\n\n\f\n\n")
     ucf.add_argument("--q-min-toks", type=int, default=50)
     ucf.add_argument("--q-min-chars", type=int, default=200)
     ucf.add_argument("--q-alpha-min", type=float, default=0.30)
     ucf.add_argument("--q-uniq-min", type=float, default=0.10)
+    ucf.add_argument("--test", action="store_true", help="Modo test: generar solo metadata JSON sin usar servicios externos (embedding/weaviate)")
+
+    # --- ocr-upsert-company-files (archivos con Mistral OCR + normalizer especializado) ---
+    ocr_ucf = sub.add_parser("ocr-upsert-company-files", help="Procesar archivos con Mistral OCR, normalizer de tablas, chunker semántico optimizado")
+    ocr_ucf.add_argument("company_id", type=str, help="ID string de la empresa sin espacios (ej: '304' o 'company-a')")
+    ocr_ucf.add_argument("area_id", type=str, help="ID string del área sin espacios (ej: '1' o 'legal')")
+    ocr_ucf.add_argument("--max-pages", type=int, default=None)
+    ocr_ucf.add_argument("--target", type=int, default=400)
+    ocr_ucf.add_argument("--min-toks", type=int, default=50)
+    ocr_ucf.add_argument("--sep", type=str, default="\n\n\f\n\n")
+    ocr_ucf.add_argument("--q-min-toks", type=int, default=50)
+    ocr_ucf.add_argument("--q-min-chars", type=int, default=200)
+    ocr_ucf.add_argument("--q-alpha-min", type=float, default=0.30)
+    ocr_ucf.add_argument("--q-uniq-min", type=float, default=0.10)
 
     # --- bedrock-check (sanity de conexión) ---
     br = sub.add_parser("bedrock-check", help="Probar conexión a Bedrock Titan con un texto")
@@ -193,7 +226,7 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         # Use semantic chunker for better results
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -219,7 +252,7 @@ def main():
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -245,7 +278,7 @@ def main():
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -261,7 +294,7 @@ def main():
             generate_report=args.generate_report
         ))
         print(f"Archivo: {out.source_path}  (páginas: {out.page_count})")
-        print(f"Chunks SEMÁNTICOS generados: {len(out.chunks)} (con 25% overlap)")
+        print(f"Chunks SEMÁNTICOS generados: {len(out.chunks)} (con 15% overlap)")
         for i, c in enumerate(out.chunks, start=1):
             preview = c.text[:160].replace("\n", " ")
             print(f"#{i:03d} pages={c.page_start}-{c.page_end} toks={c.token_count} "
@@ -273,7 +306,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -317,7 +350,7 @@ def main():
         normalizer = MdTextNormalizer()
 
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -326,7 +359,7 @@ def main():
             ),
         )
 
-        embedder = BedrockTitanEmbedder()  # usa env: AWS_PROFILE, BEDROCK_REGION, BEDROCK_MODEL_ID, etc.
+        embedder = BedrockCohereEmbedMultilingual()  # usa env: AWS_PROFILE, BEDROCK_REGION, BEDROCK_MODEL_ID, etc.
 
         uc = EmbedChunksFromPdf(blob, extractor, normalizer, chunker, embedder)
         out = uc.execute(EmbedChunksFromPdfInput(
@@ -360,7 +393,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -368,7 +401,7 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         store = WeaviateVectorStore()
 
         try:
@@ -389,7 +422,10 @@ def main():
                     min_unique_ratio=args.q_uniq_min,
                 ),
                 doc_id=args.doc_id,
-                company_id=getattr(args, 'company_id', 'default_company'),
+                company_id="1",  # Default string ID
+                company=getattr(args, 'company_id', 'default_company'),
+                area_id="1",  # Default area ID
+                area="1",        # Default area same as area_id
                 generate_report=args.generate_report
             ))
 
@@ -405,7 +441,7 @@ def main():
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
         # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -413,7 +449,7 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         store = WeaviateVectorStore()
 
         try:
@@ -432,6 +468,7 @@ def main():
                     min_alpha_ratio=args.q_alpha_min,
                     min_unique_ratio=args.q_uniq_min,
                 ),
+                company_id_str="1",  # Default string company ID
             ))
 
             print(f"Empresa: {out.company_id}")
@@ -449,12 +486,20 @@ def main():
             store.close()
 
     elif args.cmd == "upsert-company-files":
+        # Validate company_id and area_id have no whitespace
+        if ' ' in args.company_id or '\t' in args.company_id or '\n' in args.company_id:
+            print("ERROR: company_id no puede contener espacios en blanco")
+            return
+        if ' ' in args.area_id or '\t' in args.area_id or '\n' in args.area_id:
+            print("ERROR: area_id no puede contener espacios en blanco")
+            return
+
         blob = LocalFileSystemBlob()
         extractor = PyMuPDFTextExtractor()
         tokenizer = SimpleRegexTokenizer()
         normalizer = MdTextNormalizer()
-        # Use semantic chunker for better results  
-        chunker = ChunkSemanticAdapter(
+        # Use semantic chunker for better results
+        chunker = create_semantic_chunker(
             tokenizer,
             ChunkerConfig(
                 target_tokens=args.target,
@@ -462,14 +507,13 @@ def main():
                 page_separator=args.sep,
             ),
         )
-        embedder = BedrockTitanEmbedder()
-        store = WeaviateVectorStore()
 
-        try:
-            uc = EmbedAndUpsertFilesWithMetadata(blob, extractor, normalizer, chunker, embedder, store)
-            out = uc.execute(EmbedAndUpsertFilesWithMetadataInput(
-                company_name=args.company_name,
-                area_name=args.area_name,
+        if args.test:
+            # Test mode: only generate metadata JSON files without external services
+            uc = TestMetadataGeneration(blob, extractor, normalizer, chunker)
+            out = uc.execute(TestMetadataGenerationInput(
+                company_id=args.company_id,
+                area_id=args.area_id,
                 max_pages=args.max_pages,
                 chunker_cfg=ChunkerConfig(
                     target_tokens=args.target,
@@ -485,21 +529,153 @@ def main():
             ))
 
             print(f"\n{'=' * 80}")
-            print(f"📊 RESUMEN FINAL")
+            print(f"FINAL SUMMARY - TEST MODE")
             print(f"{'=' * 80}")
-            print(f"🏢 Empresa: {out.company_name} | 🏷️ Área: {out.area_name}")
+            print(f"Company ID: {out.company_id} | Area ID: {out.area_id}")
+            print(f"Files processed: {out.successful_files}/{out.total_files}")
+            print(f"Total metadata objects generated: {out.total_metadata_generated}")
+            print(f"JSON files saved in: reports/metadata/")
+            print(f"{'=' * 80}")
+
+            # Mostrar errores si los hay
+            errors = [r for r in out.reports if not r.success]
+            if errors:
+                print(f"ERRORS ({len(errors)}):")
+                for report in errors:
+                    print(f"   - {report.file_path.name}: {report.error_message}")
+
+            # Mostrar archivos procesados exitosamente
+            successes = [r for r in out.reports if r.success]
+            if successes:
+                print(f"FILES PROCESSED:")
+                for report in successes:
+                    print(f"   - {report.file_path.name}: {report.metadata_count} metadata -> {Path(report.output_file).name}")
+
+        else:
+            # Normal mode: full pipeline with embedding and Weaviate
+            embedder = BedrockCohereEmbedMultilingual()
+            store = WeaviateVectorStore()
+
+            try:
+                uc = EmbedAndUpsertFilesWithMetadata(blob, extractor, normalizer, chunker, embedder, store)
+                out = uc.execute(EmbedAndUpsertFilesWithMetadataInput(
+                    company_id=args.company_id,
+                    area_id=args.area_id,
+                    max_pages=args.max_pages,
+                    chunker_cfg=ChunkerConfig(
+                        target_tokens=args.target,
+                        min_tokens=args.min_toks,
+                        page_separator=args.sep,
+                    ),
+                    quality_cfg=QualityConfig(
+                        min_tokens=args.q_min_toks,
+                        min_chars=args.q_min_chars,
+                        min_alpha_ratio=args.q_alpha_min,
+                        min_unique_ratio=args.q_uniq_min,
+                    ),
+                    embedding_model=settings.BEDROCK_MODEL_ID,
+                ))
+
+                print(f"\n{'=' * 80}")
+                print(f"📊 RESUMEN FINAL")
+                print(f"{'=' * 80}")
+                print(f"🏢 Empresa ID: {out.company_id} | 🏷️ Área ID: {out.area_id}")
+                print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
+                print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
+                print(f"Coleccion: {args.company_id}")
+                print(f"{'=' * 80}")
+
+                # Solo mostrar errores si los hay, resumen de éxitos
+                errors = [r for r in out.reports if not r.success]
+                if errors:
+                    print(f"❌ ERRORES ({len(errors)}):")
+                    for report in errors:
+                        print(f"   • {report.file_path.name}: {report.error_message}")
+
+                successes = [r for r in out.reports if r.success]
+                if successes and len(successes) <= 10:
+                    print(f"✅ ARCHIVOS PROCESADOS:")
+                    for report in successes:
+                        print(f"   • {report.file_path.name}: {report.chunks_written} chunks")
+                elif successes:
+                    total_chunks_by_success = sum(r.chunks_written for r in successes)
+                    print(f"✅ {len(successes)} archivos procesados exitosamente ({total_chunks_by_success} chunks totales)")
+            finally:
+                store.close()
+
+    elif args.cmd == "ocr-upsert-company-files":
+        # Validate company_id and area_id have no whitespace
+        if ' ' in args.company_id or '\t' in args.company_id or '\n' in args.company_id:
+            print("ERROR: company_id no puede contener espacios en blanco")
+            return
+        if ' ' in args.area_id or '\t' in args.area_id or '\n' in args.area_id:
+            print("ERROR: area_id no puede contener espacios en blanco")
+            return
+
+        # Initialize Mistral client from settings
+        if not settings.MISTRAL_API_KEY:
+            print("ERROR: MISTRAL_API_KEY no está configurada en el archivo .env")
+            return
+
+        mistral_client = Mistral(api_key=settings.MISTRAL_API_KEY)
+
+        # Setup components for OCR pipeline
+        blob = LocalFileSystemBlob()
+        mistral_extractor = MistralOCRTextExtractor(mistral_client)
+        tokenizer = SimpleRegexTokenizer()
+        ocr_normalizer = OcrMdTextNormalizer()
+
+        # Use semantic optimized chunker
+        chunker = create_semantic_chunker(
+            tokenizer,
+            ChunkerConfig(
+                target_tokens=args.target,
+                min_tokens=args.min_toks,
+                page_separator=args.sep,
+            ),
+        )
+
+        embedder = BedrockCohereEmbedMultilingual()
+        store = WeaviateVectorStore()
+
+        try:
+            uc = OcrEmbedAndUpsertFilesWithMetadata(
+                blob, mistral_extractor, ocr_normalizer, chunker, embedder, store
+            )
+            out = uc.execute(OcrEmbedAndUpsertFilesWithMetadataInput(
+                company_id=args.company_id,
+                area_id=args.area_id,
+                max_pages=args.max_pages,
+                chunker_cfg=ChunkerConfig(
+                    target_tokens=args.target,
+                    min_tokens=args.min_toks,
+                    page_separator=args.sep,
+                ),
+                quality_cfg=QualityConfig(
+                    min_tokens=args.q_min_toks,
+                    min_chars=args.q_min_chars,
+                    min_alpha_ratio=args.q_alpha_min,
+                    min_unique_ratio=args.q_uniq_min,
+                ),
+                embedding_model=settings.BEDROCK_MODEL_ID,
+            ))
+
+            print(f"\n{'=' * 80}")
+            print(f"📊 RESUMEN FINAL - MISTRAL OCR")
+            print(f"{'=' * 80}")
+            print(f"🏢 Empresa ID: {out.company_id} | 🏷️ Área ID: {out.area_id}")
             print(f"📁 Archivos procesados: {out.successful_files}/{out.total_files}")
             print(f"📦 Total chunks almacenados: {out.total_chunks_written}")
-            print(f"🗃️ Colección: {args.company_name}")
+            print(f"Colección: {args.company_id}")
             print(f"{'=' * 80}")
-            
-            # Solo mostrar errores si los hay, resumen de éxitos
+
+            # Mostrar errores si los hay
             errors = [r for r in out.reports if not r.success]
             if errors:
                 print(f"❌ ERRORES ({len(errors)}):")
                 for report in errors:
                     print(f"   • {report.file_path.name}: {report.error_message}")
-            
+
             successes = [r for r in out.reports if r.success]
             if successes and len(successes) <= 10:
                 print(f"✅ ARCHIVOS PROCESADOS:")
@@ -510,9 +686,9 @@ def main():
                 print(f"✅ {len(successes)} archivos procesados exitosamente ({total_chunks_by_success} chunks totales)")
         finally:
             store.close()
-            
+
     elif args.cmd == "bedrock-check":
-        embedder = BedrockTitanEmbedder()
+        embedder = BedrockCohereEmbedMultilingual()
         vec = embedder.embed_texts([args.text])[0]
         print(f"Texto: {args.text}")
         print(f"Dimensión: {len(vec)}")

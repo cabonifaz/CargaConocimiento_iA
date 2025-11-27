@@ -33,6 +33,10 @@ class EmbedAndUpsertCompanyPdfsInput:
     chunker_cfg: Optional[ChunkerConfig] = None
     quality_cfg: Optional[QualityConfig] = None
 
+    # Company metadata
+    company_id_str: str = "1"  # String ID for Weaviate
+    embedding_model: str = "cohere.embed-multilingual-v3"
+
 @dataclass
 class EmbedAndUpsertCompanyPdfsOutput:
     company_id: str
@@ -80,12 +84,18 @@ class EmbedAndUpsertCompanyPdfs:
 
                 # Then upsert to collection with company name
                 doc_id = pdf_file.stem
+                area_id = self._get_area_id(area)  # Map area name to ID
+
                 written = self.vector_store.upsert_chunks(
                     doc_id=doc_id,
                     chunks=embed_result.chunks,  # type: ignore[arg-type]
                     vectors=embed_result.vectors,
-                    company_id=params.company_id,
+                    company_id=params.company_id_str,
+                    company=params.company_id,
+                    area_id=area_id,
                     area=area,
+                    doc_title=pdf_file.stem,
+                    embedding_model=params.embedding_model,
                     collection_name=params.company_id  # Use company_id as collection name
                 )
 
@@ -153,3 +163,18 @@ class EmbedAndUpsertCompanyPdfs:
                         area_pdf_files.append((area_name, pdf_file))
         
         return sorted(area_pdf_files, key=lambda x: (x[0], x[1].name))
+
+    def _get_area_id(self, area_name: str) -> int:
+        """Map area name to numeric ID. This could be enhanced with a database lookup."""
+        area_mapping = {
+            "VENTAS": 1,
+            "MARKETING": 2,
+            "FINANZAS": 3,
+            "RECURSOS_HUMANOS": 4,
+            "OPERACIONES": 5,
+            "TECNOLOGIA": 6,
+            "LEGAL": 7,
+            "ADMINISTRACION": 8,
+            "GENERAL": 9,
+        }
+        return area_mapping.get(area_name.upper(), 99)  # Default to 99 for unknown areas

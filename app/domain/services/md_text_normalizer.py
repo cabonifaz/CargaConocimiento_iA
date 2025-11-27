@@ -3,8 +3,9 @@ from pathlib import Path
 import pathlib
 import re
 import unicodedata
+import json
 from dataclasses import dataclass
-from typing import List, Tuple, Iterable
+from typing import List, Tuple, Iterable, Dict, Any
 
 # ===== Zero-width chars que conviene remover =====
 _ZW_CHARS = [
@@ -187,6 +188,8 @@ class MdNormalizerConfig:
     normalize_checkmark_bullets: bool = True  # "✓ " -> "- "
     strip_bold_punctuation: bool = True       # convierte **,** -> ,
     strip_heading_bold: bool = True           # "# **Titulo**" -> "# Titulo"
+    convert_bold_titles_to_headings: bool = True  # "**Titulo**" -> "# Titulo"
+    remove_replacement_chars: bool = True     # remueve caracteres � (U+FFFD)
     simplify_mailto_links: bool = True        # [email](mailto:email) -> email
 
 class MdTextNormalizer:
@@ -232,7 +235,7 @@ class MdTextNormalizer:
                 f.write(f"--- Página {i+1} ---\n")
                 f.write(f"Normalizada ({len(orig)} -> {len(norm)} chars):\n-----<INICIO>-----\n{norm}\n-----<FIN>-----\n")
                 f.write("\n\n")
-        print(f"🟢 Reporte de normalización guardado en {path.resolve()}")
+        print(f"Reporte de normalización guardado en {path.resolve()}")
 
         return norm_per_page
 
@@ -291,6 +294,9 @@ class MdTextNormalizer:
         # Control chars (excepto \n, \t)
         if self.cfg.strip_control_chars:
             t = re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]", "", t)
+        # Remover caracteres de reemplazo Unicode (�)
+        if self.cfg.remove_replacement_chars:
+            t = t.replace("\uFFFD", "")  # U+FFFD = �
         # Puntuación en negrita aislada (**,** -> ,)
         if self.cfg.strip_bold_punctuation:
             t = re.sub(r"\*\*([.,;:!?])\*\*", r"\1", t)
@@ -302,6 +308,10 @@ class MdTextNormalizer:
 
     def _normalize_paragraph(self, text: str) -> str:
         t = text
+
+        # CONVERTIR TODOS los **texto** a títulos (más agresivo)
+        if self.cfg.convert_bold_titles_to_headings and self._has_bold_text(t):
+            return self._convert_all_bold_to_headings(t)
 
         # <br> -> salto de línea (mejor para embeddings)
         if self.cfg.html_br_to_newline_in_paragraphs:
@@ -334,6 +344,252 @@ class MdTextNormalizer:
             t = t.replace(placeholder, "\n\n")
 
         return t.strip()
+
+    def _has_bold_text(self, text: str) -> bool:
+        """
+        Detecta si el texto contiene cualquier **texto** en negrita.
+        """
+        return bool(re.search(r'\*\*[^*]+\*\*', text))
+
+    def _convert_all_bold_to_headings(self, text: str) -> str:
+        """
+        Convierte TODOS los **texto** a encabezados markdown.
+        Si hay múltiples negritas en el mismo párrafo, cada una se convierte en un encabezado separado.
+        """
+        lines = text.strip().splitlines()
+        result_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Buscar todas las ocurrencias de **texto**
+            bold_matches = list(re.finditer(r'\*\*([^*]+)\*\*', line))
+
+            if not bold_matches:
+                # Si no hay negrita, mantener como párrafo normal
+                result_lines.append(line)
+                continue
+
+            # Procesar cada negrita encontrada
+            current_pos = 0
+            for match in bold_matches:
+                # Agregar texto antes de la negrita (si hay)
+                before_text = line[current_pos:match.start()].strip()
+                if before_text:
+                    result_lines.append(before_text)
+
+                # Convertir la negrita a encabezado
+                bold_text = match.group(1).strip()
+                if len(bold_text) >= 1:  # Muy relajado, aceptar casi cualquier cosa
+                    heading_level = self._determine_heading_level(bold_text)
+                    result_lines.append('#' * heading_level + ' ' + bold_text)
+
+                current_pos = match.end()
+
+            # Agregar texto después de la última negrita (si hay)
+            after_text = line[current_pos:].strip()
+            if after_text:
+                result_lines.append(after_text)
+
+        return '\n'.join(result_lines)
+
+    def _parse_markdown_table(self, table_text: str) -> Dict[str, Any]:
+        """
+        Parsea una tabla markdown y la convierte a estructura JSON.
+
+        Formato de entrada esperado:
+        | Header1 | Header2 | Header3 |
+        |---------|---------|---------|
+        | Cell1   | Cell2   | Cell3   |
+        | Cell4   | Cell5   | Cell6   |
+
+        Formato de salida:
+        {
+            "headers": ["Header1", "Header2", "Header3"],
+            "rows": [
+                ["Cell1", "Cell2", "Cell3"],
+                ["Cell4", "Cell5", "Cell6"]
+            ]
+        }
+        """
+        lines = [line.strip() for line in table_text.strip().splitlines() if line.strip()]
+
+        if len(lines) < 2:
+            return {"headers": [], "rows": []}
+
+        headers = []
+        rows = []
+        separator_found = False
+
+        for i, line in enumerate(lines):
+            # Verificar si es una línea de separación (|---|---|---|)
+            if re.match(r'^\s*\|[\s\-\|]+\|\s*$', line):
+                separator_found = True
+                continue
+
+            # Extraer celdas de la línea
+            cells = self._extract_table_cells(line)
+
+            if not cells:
+                continue
+
+            if i == 0:
+                # Primera línea = headers
+                headers = cells
+            elif separator_found:
+                # Líneas después del separador = datos
+                rows.append(cells)
+            elif i > 0:
+                # Si no hay separador pero hay más líneas, tratarlas como datos
+                rows.append(cells)
+
+        return {
+            "headers": headers,
+            "rows": rows
+        }
+
+    def _extract_table_cells(self, line: str) -> List[str]:
+        """
+        Extrae las celdas de una línea de tabla markdown.
+        Ejemplo: "| Cell1 | Cell2 | Cell3 |" -> ["Cell1", "Cell2", "Cell3"]
+        """
+        # Remover pipes del inicio y final
+        line = line.strip()
+        if line.startswith('|'):
+            line = line[1:]
+        if line.endswith('|'):
+            line = line[:-1]
+
+        # Dividir por pipes y limpiar espacios
+        cells = [cell.strip() for cell in line.split('|')]
+
+        # Filtrar celdas vacías al principio y final
+        while cells and not cells[0]:
+            cells.pop(0)
+        while cells and not cells[-1]:
+            cells.pop()
+
+        return cells
+
+    def _table_to_json_string(self, table_data: Dict[str, Any]) -> str:
+        """
+        Convierte la estructura de tabla a una representación JSON compacta.
+        """
+        if not table_data["headers"] and not table_data["rows"]:
+            return "```json\n{}\n```"
+
+        # Crear estructura más legible para el JSON
+        result = {
+            "table": {
+                "headers": table_data["headers"],
+                "rows": table_data["rows"],
+                "row_count": len(table_data["rows"]),
+                "column_count": len(table_data["headers"]) if table_data["headers"] else 0
+            }
+        }
+
+        # Formatear JSON compacto usando stringify
+        json_str = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
+
+        # Envolver en bloque de código para mejor visualización
+        return f"```json\n{json_str}\n```"
+
+    def _is_bold_title_paragraph(self, text: str) -> bool:
+        """
+        Detecta si un párrafo es realmente un título en negrita.
+        Criterios:
+        - Línea única o muy pocas líneas
+        - Principalmente contenido entre ** **
+        - Longitud apropiada para un título (5-100 chars)
+        - No contiene mucho texto fuera de la negrita
+        """
+        lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+
+        # Solo procesar párrafos de 1-3 líneas
+        if len(lines) == 0 or len(lines) > 3:
+            return False
+
+        # Unir las líneas para análisis
+        content = ' '.join(lines)
+
+        # Verificar si hay contenido en negrita
+        bold_matches = re.findall(r'\*\*(.*?)\*\*', content)
+        if not bold_matches:
+            return False
+
+        # Extraer todo el texto en negrita
+        bold_text = ' '.join(bold_matches)
+
+        # Verificar que el texto en negrita sea sustancial
+        if len(bold_text.strip()) < 5 or len(bold_text.strip()) > 100:
+            return False
+
+        # Calcular proporción de texto en negrita vs texto total
+        # Remover las marcas ** para obtener el texto limpio
+        clean_content = re.sub(r'\*\*(.*?)\*\*', r'\1', content).strip()
+
+        # Si el texto en negrita representa más del 70% del contenido, es probable que sea un título
+        if len(bold_text) >= len(clean_content) * 0.7:
+            return True
+
+        # También verificar si toda la línea es solo texto en negrita (con posibles espacios)
+        if re.match(r'^\s*\*\*[^*]+\*\*\s*$', content):
+            return True
+
+        return False
+
+    def _convert_bold_to_heading(self, text: str) -> str:
+        """
+        Convierte texto en negrita a formato de encabezado markdown.
+        Determina el nivel del encabezado basándose en el contexto.
+        """
+        lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+        content = ' '.join(lines)
+
+        # Extraer el texto de la negrita
+        title_text = re.sub(r'\*\*(.*?)\*\*', r'\1', content).strip()
+
+        # Determinar nivel de encabezado basándose en heurísticas
+        heading_level = self._determine_heading_level(title_text)
+
+        # Crear el encabezado markdown
+        return '#' * heading_level + ' ' + title_text
+
+    def _determine_heading_level(self, title_text: str) -> int:
+        """
+        Determina el nivel de encabezado basándose en el contenido del título.
+        """
+        title_lower = title_text.lower()
+
+        # Palabras que indican diferentes niveles
+        level_1_indicators = ['capítulo', 'chapter', 'parte', 'part', 'sección', 'section']
+        level_2_indicators = ['introducción', 'introduction', 'resumen', 'summary', 'conclusión', 'conclusion']
+        level_3_indicators = ['definición', 'definition', 'ejemplo', 'example', 'nota', 'note']
+
+        # Verificar indicadores de nivel 1
+        for indicator in level_1_indicators:
+            if indicator in title_lower:
+                return 1
+
+        # Verificar indicadores de nivel 2
+        for indicator in level_2_indicators:
+            if indicator in title_lower:
+                return 2
+
+        # Verificar indicadores de nivel 3
+        for indicator in level_3_indicators:
+            if indicator in title_lower:
+                return 3
+
+        # Heurísticas basadas en longitud y formato
+        if len(title_text) < 20:
+            return 2  # Títulos cortos suelen ser nivel 2
+        elif len(title_text) > 50:
+            return 3  # Títulos largos suelen ser nivel 3
+        else:
+            return 2  # Default a nivel 2
 
     def _normalize_quote_block(self, text: str) -> str:
         # Mantén el prefijo '>' por línea; limpieza suave
@@ -390,18 +646,26 @@ class MdTextNormalizer:
         return t.strip()
 
     def _normalize_table_block(self, text: str) -> str:
-        # Remove <br> tags from table cells and clean trailing spaces
+        """
+        Normaliza tablas markdown manteniendo su formato original.
+        El JSON se genera por separado en el chunker.
+        """
+        # Primero hacer la limpieza básica
         t = text
-        
+
         # Remove various forms of <br> tags
         t = t.replace("<br />", " ").replace("<br/>", " ").replace("<br>", " ")
-        
+
+        # Remove bold asterisks from table content: **text** -> text
+        t = re.sub(r'\*\*([^*]+)\*\*', r'\1', t)
+
         # Clean up multiple spaces that might result from <br> removal
         t = re.sub(r"[ \t]+", " ", t)
-        
+
         # Clean trailing spaces per line
         t = re.sub(r"[ \t]+$", "", t, flags=re.MULTILINE)
-        
+
+        # Devolver la tabla markdown limpia (no convertir a JSON aquí)
         return t
 
     def _normalize_code_block(self, text: str) -> str:

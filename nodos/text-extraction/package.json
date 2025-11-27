@@ -1,0 +1,62 @@
+{
+  "name": "n8n-nodes-mistral-ocr",
+  "version": "1.0.0",
+  "description": "n8n node for extracting text from PDFs using Mistral OCR",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "mistral",
+    "ocr",
+    "pdf",
+    "text-extraction"
+  ],
+  "license": "MIT",
+  "homepage": "",
+  "author": {
+    "name": "",
+    "email": ""
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc && gulp build:icons",
+    "dev": "tsc --watch",
+    "format": "prettier --write \"**/*.ts\"",
+    "lint": "eslint --fix \"**/*.ts\"",
+    "lintfix": "eslint --fix \"**/*.ts\"",
+    "prepublishOnly": "npm run build && npm run lint"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/MistralOcrApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/MistralOcr/MistralOcr.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "gulp": "^4.0.2",
+    "n8n-workflow": "^1.0.0",
+    "prettier": "^3.1.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@mistralai/mistralai": "^1.0.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

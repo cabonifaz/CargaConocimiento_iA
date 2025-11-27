@@ -1,162 +1,163 @@
-from typing import List, Optional
+"""Weaviate client for upserting chunks with vectors."""
+
+import logging
+from typing import List, Dict, Any
 from uuid import uuid5, NAMESPACE_URL
-from typing import Sequence
 from datetime import datetime
 
-from app.ports.outbound.chunker import ChunkType
 import weaviate
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 from weaviate.classes.config import Configure, Property, DataType, VectorDistances
 from weaviate.classes.data import DataObject
 from weaviate.exceptions import WeaviateBaseError
 
-from app.ports.outbound.vector_store import VectorStorePort
-from app.config.settings import settings
-from app.domain.models.weaviate_metadata import WeaviateChunkMetadata
-from app.domain.services.bm25_text_processor import BM25TextProcessor
+from metadata import WeaviateChunkMetadata
+from bm25_processor import BM25TextProcessor
 
-class WeaviateVectorStore(VectorStorePort):
+logger = logging.getLogger()
+
+
+class WeaviateClient:
+    """Client for managing Weaviate vector store operations."""
+
     def __init__(
         self,
-        url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        collection: Optional[str] = None,
-        distance: Optional[str] = None,
-        batch_size: Optional[int] = None,
+        url: str,
+        api_key: str,
+        distance: str = "cosine",
+        batch_size: int = 100,
     ) -> None:
-        self.url = url or settings.WEAVIATE_URL
-        self.api_key = api_key or settings.WEAVIATE_API_KEY
-        self.collection_name = collection or settings.WEAVIATE_COLLECTION
-        self.distance = (distance or settings.WEAVIATE_DISTANCE).lower()
-        self.batch_size = batch_size or settings.WEAVIATE_BATCH_SIZE
+        self.url = url
+        self.api_key = api_key
+        self.distance = distance.lower()
+        self.batch_size = batch_size
 
         if not self.url or not self.api_key:
-            raise RuntimeError("WEAVIATE_URL / WEAVIATE_API_KEY no configurados.")
+            raise RuntimeError("WEAVIATE_URL and WEAVIATE_API_KEY are required")
 
-        # 🔧 REST-only + skip init checks para evitar el fallo gRPC
         self.client = weaviate.connect_to_weaviate_cloud(
             cluster_url=self.url,
             auth_credentials=Auth.api_key(self.api_key),
             skip_init_checks=True,
             additional_config=AdditionalConfig(timeout=Timeout(init=30)),
         )
-        self._ensure_collection()
 
     def close(self) -> None:
+        """Close Weaviate client connection."""
         try:
             self.client.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error closing Weaviate client: {e}")
 
-    def upsert_chunks(self,
-                     doc_id: str,
-                     chunks: Sequence[ChunkType],
-                     vectors: List[list[float]],
-                     company_id: str,
-                     company: str,
-                     area_id: str,
-                     area: str,
-                     doc_title: str = "",
-                     embedding_model: str = "cohere.embed-multilingual-v3",
-                     collection_name: Optional[str] = None) -> int:
-        print(f"🗃️ [UPSERT] Iniciando upsert a Weaviate collection '{collection_name or self.collection_name}'")
+    def upsert_chunks(
+        self,
+        chunks: List[Dict[str, Any]],
+        vectors: List[List[float]],
+        doc_id: str,
+        company_id: str,
+        area_id: str,
+        doc_title: str,
+        embedding_model: str,
+        collection_name: str,
+    ) -> int:
+        """
+        Upsert chunks with their vectors to Weaviate.
 
+        Args:
+            chunks: List of chunk dictionaries from norm_chunk_lambda_fn
+            vectors: List of embedding vectors (aligned with chunks)
+            doc_id: Document identifier
+            company_id: Company identifier
+            area_id: Area identifier
+            doc_title: Document title
+            embedding_model: Model used for embeddings
+            collection_name: Weaviate collection name
+
+        Returns:
+            Number of chunks written
+        """
         if len(chunks) != len(vectors):
-            raise ValueError("chunks y vectors deben tener la misma longitud.")
+            raise ValueError("chunks and vectors must have the same length")
+
         if not chunks:
-            print(f"🗃️ [UPSERT] → Sin datos para upsert (0 chunks)")
+            logger.info("No chunks to upsert")
             return 0
 
         dim = len(vectors[0])
         if any(len(v) != dim for v in vectors):
-            raise ValueError("Todos los vectores deben tener la misma dimensión.")
+            raise ValueError("All vectors must have the same dimension")
 
-        # Use the provided collection name or fall back to default
-        target_collection = collection_name or self.collection_name
-        self._ensure_collection_exists(target_collection)
+        logger.info(f"Upserting {len(chunks)} chunks to collection '{collection_name}'")
 
-
-        coll = self.client.collections.get(target_collection)
+        self._ensure_collection_exists(collection_name)
+        coll = self.client.collections.get(collection_name)
 
         total = 0
         bs = self.batch_size
-
 
         for i in range(0, len(chunks), bs):
             batch_chunks = chunks[i:i+bs]
             batch_vecs = vectors[i:i+bs]
 
-            objs: list = []
-            id_map: list[tuple[dict, list[float], str]] = []
+            objs: List[DataObject] = []
+            id_map: List[tuple] = []
 
-            for c, vec in zip(batch_chunks, batch_vecs):
-                # Extract section information using domain service
-                section_title, section_path, bm25_text = BM25TextProcessor.extract_section_info(c.text)
+            for chunk, vec in zip(batch_chunks, batch_vecs):
+                section_title, section_path, bm25_text = BM25TextProcessor.extract_section_info(
+                    chunk['text']
+                )
 
-                # Create metadata using domain model
                 metadata = WeaviateChunkMetadata(
-                    # Texto para búsqueda
-                    text=c.text,
+                    text=chunk['text'],
                     bm25_text=bm25_text,
                     doc_title=doc_title,
                     section_title=section_title,
-
-                    # Identificadores
                     doc_id=doc_id,
                     company_id=company_id,
-                    company=company,
+                    company=company_id,  # Same as company_id
                     area_id=area_id,
-                    area=area,
+                    area=area_id,  # Same as area_id
                     section_path=section_path,
-
-                    # Posición
-                    page_start=c.page_start,
-                    page_end=c.page_end,
-
-                    # Embedding info
+                    page_start=chunk.get('page_start', 1),
+                    page_end=chunk.get('page_end', 1),
                     embedding_model=embedding_model,
                     embedding_dim=len(vec),
-
-                    # Opcionales
-                    chunk_id=c.chunk_id,
-                    token_count=c.token_count,
-                    char_start=c.char_start,
-                    char_end=c.char_end,
+                    chunk_id=chunk['chunk_id'],
+                    token_count=chunk['token_count'],
+                    char_start=chunk['char_start'],
+                    char_end=chunk['char_end'],
                     ingested_at=datetime.now().isoformat(),
                 )
 
                 props = metadata.to_weaviate_properties()
-                # UUID RFC-4122 determinístico a partir de doc_id + chunk_id
-                uid = str(uuid5(NAMESPACE_URL, f"{doc_id}:{c.chunk_id}"))
+                uid = str(uuid5(NAMESPACE_URL, f"{doc_id}:{chunk['chunk_id']}"))
                 objs.append(DataObject(properties=props, vector=vec, uuid=uid))
                 id_map.append((props, vec, uid))
 
             try:
-                # intento rápido en batch
                 coll.data.insert_many(objs)
-
                 total += len(objs)
-            except WeaviateBaseError:
-                # fallback: upsert por ítem (insert → replace si ya existe)
+
+            except WeaviateBaseError as e:
+                logger.warning(f"Batch insert failed, falling back to individual inserts: {e}")
                 for props, vec, uid in id_map:
                     try:
                         coll.data.insert(properties=props, uuid=uid, vector=vec)
                     except WeaviateBaseError:
-                        # si ya existe u otro conflicto, hacemos replace (sobrescribe todo)
                         coll.data.replace(uuid=uid, properties=props, vector=vec)
                     total += 1
-        print(f"🗃️ [UPSERT] → {total} chunks cargados exitosamente")
+
+        logger.info(f"Successfully upserted {total} chunks to Weaviate")
         return total
 
-
-    def _ensure_collection(self) -> None:
-        self._ensure_collection_exists(self.collection_name)
-
     def _ensure_collection_exists(self, collection_name: str) -> None:
+        """Ensure collection exists, create if it doesn't."""
         try:
             self.client.collections.get(collection_name)
+            logger.info(f"Collection '{collection_name}' already exists")
             return
         except Exception:
+            logger.info(f"Creating collection '{collection_name}'")
             pass
 
         metric = self._metric_from_str(self.distance)
@@ -172,8 +173,6 @@ class WeaviateVectorStore(VectorStorePort):
                 bm25_b=0.75,
             ),
             properties=[
-
-                # ==== Texto para búsqueda semántica/híbrida ====
                 Property(name="text", data_type=DataType.TEXT,
                         index_searchable=True, index_filterable=False),
                 Property(name="bm25_text", data_type=DataType.TEXT,
@@ -182,46 +181,38 @@ class WeaviateVectorStore(VectorStorePort):
                         index_searchable=True, index_filterable=True),
                 Property(name="section_title", data_type=DataType.TEXT,
                         index_searchable=True, index_filterable=True),
-
-                # ==== Identificadores y organización ====
                 Property(name="doc_id", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
-
                 Property(name="company_id", data_type=DataType.TEXT,
-                        tokenization="field", index_searchable=False, index_filterable=True),    # ID string
+                        tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="company", data_type=DataType.TEXT,
-                        tokenization="field", index_searchable=False, index_filterable=True),  # nombre textual
-
+                        tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="area_id", data_type=DataType.TEXT,
-                        tokenization="field", index_searchable=False, index_filterable=True),    # ID string
+                        tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="area", data_type=DataType.TEXT,
-                        tokenization="field", index_searchable=False, index_filterable=True),  # nombre textual
-
+                        tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="section_path", data_type=DataType.TEXT_ARRAY,
                         index_searchable=False, index_filterable=True),
-
-                # ==== Posición en el documento ====
                 Property(name="page_start", data_type=DataType.INT, index_filterable=True),
                 Property(name="page_end", data_type=DataType.INT, index_filterable=True),
-
-                # ==== Información de embedding / trazabilidad ====
                 Property(name="embedding_model", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="embedding_dim", data_type=DataType.INT,
                         index_filterable=True),
-
-                # Opcionales útiles (NO searcheables, solo guardados)
-                Property(name="chunk_id", data_type=DataType.TEXT, tokenization="field", index_searchable=False, index_filterable=False),
+                Property(name="chunk_id", data_type=DataType.TEXT,
+                        tokenization="field", index_searchable=False, index_filterable=False),
                 Property(name="token_count", data_type=DataType.INT, index_filterable=False),
                 Property(name="char_start", data_type=DataType.INT, index_filterable=False),
                 Property(name="char_end", data_type=DataType.INT, index_filterable=False),
-                Property(name="ingested_at", data_type=DataType.TEXT, index_searchable=False, index_filterable=False)
+                Property(name="ingested_at", data_type=DataType.TEXT,
+                        index_searchable=False, index_filterable=False)
             ],
         )
-
+        logger.info(f"Collection '{collection_name}' created successfully")
 
     @staticmethod
-    def _metric_from_str(s: str):
+    def _metric_from_str(s: str) -> VectorDistances:
+        """Convert distance metric string to Weaviate VectorDistances enum."""
         s = (s or "cosine").lower()
         if s == "cosine":
             return VectorDistances.COSINE

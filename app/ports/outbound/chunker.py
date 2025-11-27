@@ -6,8 +6,8 @@ from app.ports.outbound.tokenizer import TokenCounterPort
 
 @dataclass(frozen=True)
 class ChunkerConfig:
-    target_tokens: int = 512
-    overlap_tokens: int = 64
+    target_tokens: int = 400  # Optimal range 300-600 tokens
+    overlap_tokens: int = 60   # 15% overlap (400 * 0.15 = 60)
     min_tokens: int = 50
     # Separador entre páginas en el texto unido (no es visible al usuario final).
     # Usa algo poco probable en el contenido para que el mapeo sea estable.

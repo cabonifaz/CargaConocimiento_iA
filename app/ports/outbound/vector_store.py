@@ -6,5 +6,15 @@ from app.ports.outbound.chunker import ChunkType
 # Updated to use ChunkType from hexagonal architecture refactoring
 
 class VectorStorePort(Protocol):
-    def upsert_chunks(self, doc_id: str, chunks: Sequence[ChunkType], vectors: List[list[float]], company_id: str = "default_company", area: str = "VENTAS", collection_name: Optional[str] = None) -> int:
+    def upsert_chunks(self,
+                     doc_id: str,
+                     chunks: Sequence[ChunkType],
+                     vectors: List[list[float]],
+                     company_id: str,
+                     company: str,
+                     area_id: str,
+                     area: str,
+                     doc_title: str = "",
+                     embedding_model: str = "cohere.embed-multilingual-v3",
+                     collection_name: Optional[str] = None) -> int:
         ...
