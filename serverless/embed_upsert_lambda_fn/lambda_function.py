@@ -89,8 +89,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         # Derive doc_id from filename field in chunks (remove .pdf extension)
         filename = chunks[0].get('filename', 'document.pdf') if chunks else 'document.pdf'
-        doc_id = filename.replace('.pdf', '').replace('.PDF', '')
-        doc_title = doc_id  # Same as doc_id
+        doc_id = f"CONOC-{id_carga}"
+        doc_title = filename.replace('.pdf', '').replace('.PDF', '')
         collection_name = company_id
 
         logger.info(f"Processing {len(chunks)} chunks for doc_id={doc_id}, company_id={company_id}, area_id={area_id}, id_carga={id_carga}")
