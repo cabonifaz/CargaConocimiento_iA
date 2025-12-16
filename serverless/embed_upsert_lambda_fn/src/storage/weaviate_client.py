@@ -1,7 +1,7 @@
 """Weaviate client for upserting chunks with vectors."""
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from uuid import uuid5, NAMESPACE_URL
 from datetime import datetime
 
@@ -11,8 +11,8 @@ from weaviate.classes.config import Configure, Property, DataType, VectorDistanc
 from weaviate.classes.data import DataObject
 from weaviate.exceptions import WeaviateBaseError
 
-from metadata import WeaviateChunkMetadata
-from bm25_processor import BM25TextProcessor
+from .models import WeaviateChunkMetadata
+from ..embeddings import BedrockBM25Generator
 
 logger = logging.getLogger()
 
@@ -24,13 +24,17 @@ class WeaviateClient:
         self,
         url: str,
         api_key: str,
+        bedrock_region: str,
         distance: str = "cosine",
         batch_size: int = 100,
+        bm25_model_id: str = "us.meta.llama4-maverick-17b-instruct-v1:0",
     ) -> None:
         self.url = url
         self.api_key = api_key
+        self.bedrock_region = bedrock_region
         self.distance = distance.lower()
         self.batch_size = batch_size
+        self.bm25_model_id = bm25_model_id
 
         if not self.url or not self.api_key:
             raise RuntimeError("WEAVIATE_URL and WEAVIATE_API_KEY are required")
@@ -40,6 +44,12 @@ class WeaviateClient:
             auth_credentials=Auth.api_key(self.api_key),
             skip_init_checks=True,
             additional_config=AdditionalConfig(timeout=Timeout(init=30)),
+        )
+
+        # Initialize Bedrock BM25 generator
+        self.bm25_generator = BedrockBM25Generator(
+            region=self.bedrock_region,
+            model_id=self.bm25_model_id,
         )
 
     def close(self) -> None:
@@ -92,20 +102,26 @@ class WeaviateClient:
         self._ensure_collection_exists(collection_name)
         coll = self.client.collections.get(collection_name)
 
+        # Generate BM25 text for all chunks using Bedrock
+        logger.info("Generating BM25 text using Bedrock Llama 4 Maverick model")
+        chunk_texts = [chunk['text'] for chunk in chunks]
+        bm25_texts = self.bm25_generator.generate_bm25_texts(chunk_texts)
+
         total = 0
         bs = self.batch_size
 
         for i in range(0, len(chunks), bs):
             batch_chunks = chunks[i:i+bs]
             batch_vecs = vectors[i:i+bs]
+            batch_bm25 = bm25_texts[i:i+bs]
 
             objs: List[DataObject] = []
             id_map: List[tuple] = []
 
-            for chunk, vec in zip(batch_chunks, batch_vecs):
-                section_title, section_path, bm25_text = BM25TextProcessor.extract_section_info(
-                    chunk['text']
-                )
+            for chunk, vec, bm25_text in zip(batch_chunks, batch_vecs, batch_bm25):
+                # Extract section info from chunk metadata
+                section_title = chunk.get('section_title', '')
+                section_path = chunk.get('section_path', [])
 
                 metadata = WeaviateChunkMetadata(
                     text=chunk['text'],
@@ -161,6 +177,11 @@ class WeaviateClient:
             pass
 
         metric = self._metric_from_str(self.distance)
+        # Note: Weaviate Cloud may show all fields as "filterable" in the UI by default,
+        # but the explicit index_filterable settings below take precedence and optimize performance.
+        # Text fields (text, bm25_text) should NOT be filterable for performance reasons.
+        # Technical metadata (chunk_id, token_count, char_start, char_end, ingested_at) are
+        # typically not used for filtering and are left non-filterable to improve query performance.
         self.client.collections.create(
             name=collection_name,
             description="Chunks de manuales (BYOV)",
@@ -173,16 +194,19 @@ class WeaviateClient:
                 bm25_b=0.75,
             ),
             properties=[
+                # Large text fields - searchable but not filterable for performance
                 Property(name="text", data_type=DataType.TEXT,
                         index_searchable=True, index_filterable=False),
                 Property(name="bm25_text", data_type=DataType.TEXT,
                         index_searchable=True, index_filterable=False),
+                # Document and section identifiers - filterable for queries
                 Property(name="doc_title", data_type=DataType.TEXT,
                         index_searchable=True, index_filterable=True),
                 Property(name="section_title", data_type=DataType.TEXT,
                         index_searchable=True, index_filterable=True),
                 Property(name="doc_id", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
+                # Organization identifiers - filterable for multi-tenancy
                 Property(name="company_id", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="company", data_type=DataType.TEXT,
@@ -191,14 +215,17 @@ class WeaviateClient:
                         tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="area", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
+                # Hierarchical and range filters
                 Property(name="section_path", data_type=DataType.TEXT_ARRAY,
                         index_searchable=False, index_filterable=True),
                 Property(name="page_start", data_type=DataType.INT, index_filterable=True),
                 Property(name="page_end", data_type=DataType.INT, index_filterable=True),
+                # Embedding metadata - filterable for debugging/analytics
                 Property(name="embedding_model", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=True),
                 Property(name="embedding_dim", data_type=DataType.INT,
                         index_filterable=True),
+                # Technical metadata - not typically filtered, kept non-filterable for performance
                 Property(name="chunk_id", data_type=DataType.TEXT,
                         tokenization="field", index_searchable=False, index_filterable=False),
                 Property(name="token_count", data_type=DataType.INT, index_filterable=False),
