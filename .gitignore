@@ -1,7 +1,37 @@
 __pycache__/
 *.py[cod]
 .venv/
+venv/
 .env
 *.log
 .ipynb_checkpoints
 .DS_Store
+company_files/
+data/
+report/
+.vscode/
+reports/
+*.local.*
+*.zip
+lambda_layer/
+references/
+
+# Python
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+ENV/
+
+# IDE
+*.swp
+*.swo
+*~
+
+# Output
+output/
+*.txt
+
+# Logs
+*.log
