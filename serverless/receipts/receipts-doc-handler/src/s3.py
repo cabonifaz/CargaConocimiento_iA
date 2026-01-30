@@ -1,5 +1,4 @@
 import logging
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,5 @@ def upload_page(s3_client, bucket, key, body, content_type):
     logger.info({"action": "uploaded_page", "destination": key})
 
 
-def build_destination_key(prefix, base_name, filename):
-    if prefix:
-        return f"{prefix}/{base_name}/{filename}"
-    return f"{base_name}/{filename}"
+def build_destination_key(job_id, page_number, extension):
+    return f"result-pages/{job_id}/pages/page_{page_number:04d}{extension}"
