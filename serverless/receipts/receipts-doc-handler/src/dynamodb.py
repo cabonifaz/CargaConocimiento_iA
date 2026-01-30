@@ -2,6 +2,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from botocore.exceptions import ClientError
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +30,11 @@ def create_job(jobs_table, document_key, document_size, uploaded_at, total_pages
         "estimated_bedrock_cost": "0.0",
     }
 
-    jobs_table.put_item(Item=item)
-    logger.info({"action": "created_job", "job_id": job_id, "document_key": document_key})
+    try:
+        jobs_table.put_item(Item=item)
+        logger.info({"action": "create_job_success", "job_id": job_id, "document_key": document_key})
+    except ClientError as e:
+        logger.error({"action": "create_job_failed", "job_id": job_id, "document_key": document_key, "error": str(e)})
+        raise
+
     return job_id
