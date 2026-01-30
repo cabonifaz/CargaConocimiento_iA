@@ -27,11 +27,13 @@ def lambda_handler(event, context):
         # obtain object info from event
         source_bucket = record["s3"]["bucket"]["name"]
         source_key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
-        logger.info({"action": "processing_object", "bucket": source_bucket, "key": source_key})
+        upload_timestamp = record["eventTime"]
+        logger.info({"action": "processing_object", "bucket": source_bucket, "key": source_key, "upload_timestamp": upload_timestamp})
 
         # get file info
         response = s3_client.get_object(Bucket=source_bucket, Key=source_key)
         file_bytes = response["Body"].read()
+        file_size = len(file_bytes)
         content_type = response.get("ContentType", "")
 
         ext = os.path.splitext(source_key)[1].lower()
@@ -43,16 +45,16 @@ def lambda_handler(event, context):
 
 
         if ext == ".pdf":
-            _process_pdf(file_bytes, source_bucket, source_key, base_name, prefix)
+            _process_pdf(file_bytes, file_size, upload_timestamp, source_bucket, source_key, base_name, prefix)
         elif ext in IMAGE_EXTENSIONS:
-            _process_image(file_bytes, source_bucket, source_key, base_name, prefix, content_type)
+            _process_image(file_bytes, file_size, upload_timestamp, source_bucket, source_key, base_name, prefix, content_type)
         else:
             logger.warning({"action": "skipped_unsupported", "key": source_key, "extension": ext})
 
     return {"statusCode": 200, "body": f"Processed {len(records)} record(s)"}
 
 
-def _process_pdf(file_bytes, source_bucket, source_key, base_name, prefix):
+def _process_pdf(file_bytes, file_size, upload_timestamp, source_bucket, source_key, base_name, prefix):
     reader = PdfReader(io.BytesIO(file_bytes))
     total_pages = len(reader.pages)
     logger.info({"action": "splitting_pdf", "key": source_key, "total_pages": total_pages})
@@ -75,10 +77,10 @@ def _process_pdf(file_bytes, source_bucket, source_key, base_name, prefix):
         )
         logger.info({"action": "uploaded_page", "destination": dest_key, "page": page_num + 1})
 
-        _publish_message(source_bucket, source_key, dest_key, page_num + 1, total_pages)
+        _publish_message(source_bucket, source_key, dest_key, page_num + 1, total_pages, file_size, upload_timestamp)
 
 
-def _process_image(file_bytes, source_bucket, source_key, base_name, prefix, content_type):
+def _process_image(file_bytes, file_size, upload_timestamp, source_bucket, source_key, base_name, prefix, content_type):
     dest_key = f"{prefix}/{base_name}/{os.path.basename(source_key)}" if prefix else f"{base_name}/{os.path.basename(source_key)}"
 
     s3_client.put_object(
@@ -89,10 +91,10 @@ def _process_image(file_bytes, source_bucket, source_key, base_name, prefix, con
     )
     logger.info({"action": "uploaded_image", "destination": dest_key})
 
-    _publish_message(source_bucket, source_key, dest_key, page_number=1, total_pages=1)
+    _publish_message(source_bucket, source_key, dest_key, page_number=1, total_pages=1, file_size=file_size, upload_timestamp=upload_timestamp)
 
 
-def _publish_message(source_bucket, source_key, dest_key, page_number, total_pages):
+def _publish_message(source_bucket, source_key, dest_key, page_number, total_pages, file_size, upload_timestamp):
     message = {
         "source_bucket": source_bucket,
         "source_key": source_key,
@@ -100,6 +102,8 @@ def _publish_message(source_bucket, source_key, dest_key, page_number, total_pag
         "destination_key": dest_key,
         "page_number": page_number,
         "total_pages": total_pages,
+        "file_size": file_size,
+        "upload_timestamp": upload_timestamp,
     }
 
     sqs_client.send_message(
