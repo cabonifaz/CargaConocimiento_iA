@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from botocore.exceptions import ClientError
 
@@ -26,8 +27,8 @@ def create_job(jobs_table, document_key, document_size, uploaded_at, total_pages
         "total_mistral_pages": 0,
         "total_bedrock_input_tokens": 0,
         "total_bedrock_output_tokens": 0,
-        "estimated_mistral_cost": "0.0",
-        "estimated_bedrock_cost": "0.0",
+        "estimated_mistral_cost": Decimal("0"),
+        "estimated_bedrock_cost": Decimal("0"),
     }
 
     try:
