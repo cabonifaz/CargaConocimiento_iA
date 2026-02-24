@@ -31,5 +31,5 @@ def upload_page(s3_client, bucket, key, body, content_type):
         raise
 
 
-def build_destination_key(job_id, page_number, extension):
-    return f"result-pages/{job_id}/pages/page_{page_number:04d}{extension}"
+def build_destination_key(page_number, extension):
+    return f"result_pages/pages/page_{page_number:04d}{extension}"
