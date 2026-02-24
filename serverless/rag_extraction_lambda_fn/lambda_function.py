@@ -5,13 +5,15 @@ Triggered by: SQS extraction queue (published by FastAPI /register_ingestion end
 Runtime:      Python 3.11
 
 Flow per SQS record:
-  1. Parse message → id_documento, id_proceso, ruta_documento, nombre_documento, id_empresa, id_area
+  1. Parse message → id_documento, id_proceso, ruta_documento, nombre_documento,
+                     id_empresa, id_area, id_modelo_embedding
   2. Generate presigned GET URL for the source PDF in S3
   3. SP_RAG_INGESTA_INICIAR_ETAPA  → state=2 (Extrayendo texto), obtain ID_LOG
   4. Mistral OCR on presigned URL  → list of page markdown strings
   5. Join pages with page-break separator → full markdown document
   6. Upload .md to S3:  ingest-results/extraction/{id_empresa}/{id_area}/{nombre}.md
   7. SP_RAG_INGESTA_COMPLETAR_ETAPA → state=3 (En cola segmentación), record cost & S3 key
+  8. Publish message to chunking SQS queue → triggers Stage 2
   On error (after step 3):
      SP_RAG_INGESTA_FALLAR_ETAPA → state=8 (Error)
      re-raise → SQS partial batch failure → DLQ after maxReceiveCount
@@ -21,6 +23,7 @@ Environment variables:
   MISTRAL_API_KEY
   S3_DOCUMENTS_BUCKET   — bucket where uploaded PDFs live
   S3_RESULTS_BUCKET     — bucket where .md results are written
+  CHUNKING_QUEUE_URL    — SQS URL of the chunking (segmentation) queue
 """
 
 import json
@@ -32,6 +35,7 @@ from src.database import SQLServerClient
 from src.storage import S3Client
 from src.ocr import MistralOCRClient
 from src.ocr.mistral_client import MistralOCRClient as _OCR  # re-use cost helper
+from src.queue import SQSPublisher
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -45,7 +49,7 @@ PAGE_SEPARATOR = "\n\n---\n\n"
 
 
 def _build_clients() -> tuple:
-    """Read env vars and instantiate the three clients."""
+    """Read env vars and instantiate all clients."""
     db_client = SQLServerClient(
         server=os.environ["DB_SERVER"],
         database=os.environ["DB_NAME"],
@@ -63,7 +67,11 @@ def _build_clients() -> tuple:
         api_key=os.environ["MISTRAL_API_KEY"],
     )
 
-    return db_client, s3_client, ocr_client
+    sqs_publisher = SQSPublisher(
+        queue_url=os.environ["CHUNKING_QUEUE_URL"],
+    )
+
+    return db_client, s3_client, ocr_client, sqs_publisher
 
 
 def _process_record(
@@ -71,6 +79,7 @@ def _process_record(
     db_client: SQLServerClient,
     s3_client: S3Client,
     ocr_client: MistralOCRClient,
+    sqs_publisher: SQSPublisher,
 ) -> None:
     """
     Process a single SQS record (one document).
@@ -85,6 +94,7 @@ def _process_record(
     nombre_documento: str = body["nombre_documento"]
     id_empresa: int = body["id_empresa"]
     id_area: int = body["id_area"]
+    id_modelo_embedding: int = body["id_modelo_embedding"]
 
     logger.info(
         f"[doc={id_documento}] Starting extraction — "
@@ -127,6 +137,17 @@ def _process_record(
             costo_usd=cost_usd,
         )
 
+        # ── 9. Enqueue next stage (chunking) ───────────────────────────────
+        sqs_publisher.publish({
+            "id_documento": id_documento,
+            "id_proceso": id_proceso,
+            "id_empresa": id_empresa,
+            "id_area": id_area,
+            "nombre_documento": nombre_documento,
+            "ruta_markdown": result_key,
+            "id_modelo_embedding": id_modelo_embedding,
+        })
+
         logger.info(
             f"[doc={id_documento}] Extraction complete — "
             f"pages={total_pages}, cost=${cost_usd:.6f}, key='{result_key}'"
@@ -167,12 +188,13 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     required_env = [
         "DB_SERVER", "DB_NAME", "DB_USER", "DB_PASSWORD",
         "MISTRAL_API_KEY", "S3_DOCUMENTS_BUCKET", "S3_RESULTS_BUCKET",
+        "CHUNKING_QUEUE_URL",
     ]
     missing = [k for k in required_env if not os.environ.get(k)]
     if missing:
         raise EnvironmentError(f"Missing required environment variables: {missing}")
 
-    db_client, s3_client, ocr_client = _build_clients()
+    db_client, s3_client, ocr_client, sqs_publisher = _build_clients()
 
     failed_message_ids: List[str] = []
 
@@ -180,7 +202,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         for record in records:
             message_id = record.get("messageId", "unknown")
             try:
-                _process_record(record, db_client, s3_client, ocr_client)
+                _process_record(record, db_client, s3_client, ocr_client, sqs_publisher)
             except Exception as e:
                 logger.error(f"Record {message_id} failed: {e}")
                 failed_message_ids.append(message_id)
