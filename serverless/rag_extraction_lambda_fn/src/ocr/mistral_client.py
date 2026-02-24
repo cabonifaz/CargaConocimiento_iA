@@ -48,7 +48,7 @@ class MistralOCRClient:
 
         response = self._client.ocr.process(
             model=self.MODEL,
-            document={"type": "document_url", "url": presigned_url},
+            document={"type": "document_url", "document_url": presigned_url},
             include_image_base64=False,
         )
 
