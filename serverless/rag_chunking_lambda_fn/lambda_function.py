@@ -117,7 +117,7 @@ def _process_record(
         # ── 5. Upload chunks JSON to S3 ────────────────────────────────────
         base_filename = os.path.splitext(nombre_documento)[0]
         result_key = (
-            f"ingest-results/chunking/{id_empresa}/{id_area}/{base_filename}.json"
+            f"ingest-results/chunks/{id_empresa}/{id_area}/{base_filename}.json"
         )
         s3_client.upload_chunks_json(result_key, chunks)
 
