@@ -40,7 +40,7 @@ class BedrockBM25Generator:
         )
         self.client = boto3.client("bedrock-runtime", region_name=self.region, config=cfg)
 
-    def generate_bm25_texts(self, chunks: List[str]) -> List[str]:
+    def generate_bm25_texts(self, chunks: List[str]) -> Tuple[List[str], int, int]:
         """
         Generate BM25-optimised text for each chunk, batching to stay within
         Llama's context window.
@@ -53,10 +53,10 @@ class BedrockBM25Generator:
             chunks: List of chunk texts.
 
         Returns:
-            List of keyword strings (one per chunk, never empty).
+            Tuple of (bm25_texts, total_input_tokens, total_output_tokens).
         """
         if not chunks:
-            return []
+            return [], 0, 0
 
         logger.info(f"Generating BM25 text for {len(chunks)} chunk(s) using {self.model_id}")
 
@@ -65,15 +65,19 @@ class BedrockBM25Generator:
         batch_size = max(1, int(self.SAFE_INPUT_TOKENS_PER_BATCH / tokens_per_chunk))
 
         results: List[str] = []
+        total_input_tokens = 0
+        total_output_tokens = 0
         n_batches = math.ceil(len(chunks) / batch_size)
 
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
-            batch_results = self._generate_batch(batch)
+            batch_results, in_tokens, out_tokens = self._generate_batch(batch)
             results.extend(batch_results)
+            total_input_tokens += in_tokens
+            total_output_tokens += out_tokens
             logger.info(
                 f"BM25 batch {i // batch_size + 1}/{n_batches} done "
-                f"({len(batch)} chunk(s))"
+                f"({len(batch)} chunk(s), in={in_tokens}, out={out_tokens})"
             )
 
         # ── Guarantee: replace any empty result with the original chunk text ──
@@ -84,22 +88,26 @@ class BedrockBM25Generator:
             for bm25, original in zip(results, chunks)
         ]
 
-        empty_count = sum(1 for b, r in zip(chunks, results) if r == b)
-        if empty_count:
+        fallback_count = sum(1 for bm25, orig in zip(results, chunks) if bm25 == orig)
+        if fallback_count:
             logger.warning(
-                f"{empty_count}/{len(chunks)} chunk(s) fell back to original text "
+                f"{fallback_count}/{len(chunks)} chunk(s) fell back to original text "
                 "because BM25 generation returned empty"
             )
 
-        logger.info(f"BM25 generation complete for {len(chunks)} chunk(s)")
-        return results
+        logger.info(
+            f"BM25 generation complete for {len(chunks)} chunk(s) — "
+            f"total_input_tokens={total_input_tokens}, total_output_tokens={total_output_tokens}"
+        )
+        return results, total_input_tokens, total_output_tokens
 
-    def _generate_batch(self, chunks: List[str]) -> List[str]:
+    def _generate_batch(self, chunks: List[str]) -> Tuple[List[str], int, int]:
         """
         Call Llama 4 Maverick to extract keywords for a batch of chunks.
 
-        Returns a list of the same length as `chunks`. Any entry may be an
-        empty string — the caller applies the non-empty guarantee.
+        Returns a tuple of (keywords_list, input_tokens, output_tokens).
+        keywords_list entries may be empty strings — the caller applies the
+        non-empty guarantee. Token counts are 0 on error (conservative).
         """
         chunks_text = ""
         for idx, chunk in enumerate(chunks, 1):
@@ -126,7 +134,10 @@ class BedrockBM25Generator:
                     "top_p": 0.9,
                 }).encode(),
             )
-            generated = json.loads(response["body"].read()).get("generation", "").strip()
+            body = json.loads(response["body"].read())
+            generated = body.get("generation", "").strip()
+            input_tokens = body.get("prompt_token_count", 0)
+            output_tokens = body.get("generation_token_count", 0)
 
             # Strip markdown code fences if present
             if "```json" in generated:
@@ -142,10 +153,10 @@ class BedrockBM25Generator:
             # Align length to batch size
             while len(keywords_list) < len(chunks):
                 keywords_list.append("")
-            return [str(k) for k in keywords_list[:len(chunks)]]
+            return [str(k) for k in keywords_list[:len(chunks)]], input_tokens, output_tokens
 
         except (ClientError, Exception) as e:
             logger.error(f"BM25 batch generation failed: {e}")
-            # Return empty strings — the caller's non-empty guarantee will
-            # replace them with the original chunk texts
-            return [""] * len(chunks)
+            # Return empty strings and zero tokens — caller applies non-empty guarantee;
+            # zeros avoid inflating cost on error
+            return [""] * len(chunks), 0, 0
