@@ -1,28 +1,6 @@
 """
 RAG Vectorization Lambda — Stage 3 (final) of the RAG ingestion pipeline.
 
-Triggered by: SQS embedding queue (published by rag_chunking_lambda_fn)
-Runtime:      Python 3.11
-
-Flow per SQS record:
-  1. Parse message → id_documento, id_proceso, id_empresa, id_area,
-                     nombre_documento, ruta_segmentos, id_modelo_embedding
-  2. Download chunks JSON from S3 (S3_RESULTS_BUCKET / ruta_segmentos)
-  3. SP_RAG_INGESTA_INICIAR_ETAPA  → state=6 (Vectorizando), obtain ID_LOG
-  4. Generate BM25 keyword texts via Bedrock Llama 4 Maverick
-     (guaranteed non-empty: falls back to original chunk text on failure)
-  5. Generate embedding vectors via Bedrock Cohere Embed Multilingual v3
-     (one call per chunk, exponential backoff on throttling)
-  6. Upsert all chunks to Weaviate:
-     - collection  = str(id_empresa)
-     - doc_id      = "CONOC-{id_documento}"
-     - id_status   = 1  (active)
-  7. SP_RAG_INGESTA_COMPLETAR_ETAPA → state=7 (Cargado — terminal success),
-     RUTA_RESULTADO=None (vectors live in Weaviate), COSTO_USD=estimated
-  On error (after step 3):
-     SP_RAG_INGESTA_FALLAR_ETAPA → state=8 (Error)
-     re-raise → SQS partial batch failure → DLQ after maxReceiveCount
-
 Environment variables:
   DB_SERVER, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT
   S3_RESULTS_BUCKET    — bucket where chunk JSON files are stored
@@ -50,8 +28,47 @@ ETAPA_VECTORIZACION = 3       # ID_MAESTRO=13, NUM1=3  (Vectorización)
 ESTADO_VECTORIZANDO = 6       # ID_MAESTRO=7,  NUM1=6  (Vectorizando)
 ESTADO_CARGADO = 7            # ID_MAESTRO=7,  NUM1=7  (Cargado — terminal success)
 
-# Cohere Embed Multilingual v3 on Bedrock: $0.10 per 1M tokens
-_COST_PER_TOKEN_USD = 0.0000001
+# ID_MODELO keys used for PARAMETROS cost lookup (ID_MAESTRO=14, NUM2 column)
+_ID_MODELO_COHERE = 4   # Cohere Embed Multilingual v3
+_ID_MODELO_LLAMA = 8    # Llama 4 Maverick 17B
+
+# Model costs fetched from DB once at cold start — populated in lambda_handler
+# {id_modelo: (cost_input_per_million_tokens, cost_output_per_million_tokens)}
+_model_costs: dict = {}
+
+
+def _load_model_costs(db_client: SQLServerClient) -> None:
+    """
+    Fetch model costs from PARAMETROS (ID_MAESTRO=14) and cache in _model_costs.
+
+    Called once per Lambda container lifetime. If the dict is already populated
+    (warm start) this is a no-op.
+    """
+    global _model_costs
+    if not _model_costs:
+        _model_costs = db_client.get_model_costs()
+        logger.info("Model costs loaded from DB: %s", _model_costs)
+
+
+def _calculate_cost(
+    embed_tokens: int,
+    llama_input_tokens: int,
+    llama_output_tokens: int,
+) -> float:
+    """
+    Compute total Bedrock cost using rates from PARAMETROS.
+
+    Rates are stored as cost per million tokens (STRING1/STRING2 columns).
+    Returns 0.0 if cost data is unavailable (conservative — never over-reports).
+    """
+    cohere_in_per_m, _ = _model_costs.get(_ID_MODELO_COHERE, (0.0, 0.0))
+    llama_in_per_m, llama_out_per_m = _model_costs.get(_ID_MODELO_LLAMA, (0.0, 0.0))
+
+    return (
+        embed_tokens       * (cohere_in_per_m  / 1_000_000)
+        + llama_input_tokens  * (llama_in_per_m   / 1_000_000)
+        + llama_output_tokens * (llama_out_per_m   / 1_000_000)
+    )
 
 
 def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str) -> tuple:
@@ -84,18 +101,6 @@ def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str
     )
 
     return db_client, s3_client, embedder, bm25_generator, weaviate_client
-
-
-def _estimate_cost(chunks: List[Dict[str, Any]]) -> float:
-    """
-    Estimate Bedrock Cohere embedding cost based on total character count.
-
-    Approximation: 1 token ≈ 4 characters.
-    Cohere Embed Multilingual v3 on Bedrock: $0.10 per 1M tokens.
-    """
-    total_chars = sum(len(c["text"]) for c in chunks)
-    estimated_tokens = total_chars // 4
-    return estimated_tokens * _COST_PER_TOKEN_USD
 
 
 def _process_record(
@@ -142,10 +147,10 @@ def _process_record(
         texts = [c["text"] for c in chunks]
 
         # ── 4. BM25 keyword generation ─────────────────────────────────────
-        bm25_texts = bm25_generator.generate_bm25_texts(texts)
+        bm25_texts, llama_in_tokens, llama_out_tokens = bm25_generator.generate_bm25_texts(texts)
 
         # ── 5. Embedding vectors ───────────────────────────────────────────
-        vectors = embedder.embed_texts(texts)
+        vectors, embed_tokens = embedder.embed_texts(texts)
 
         if len(vectors) != len(chunks):
             raise RuntimeError(
@@ -167,10 +172,12 @@ def _process_record(
             doc_title=doc_title,
             embedding_model=embedding_model,
             collection_name=collection_name,
+            id_documento=id_documento,
+            id_proceso=id_proceso,
         )
 
         # ── 7. Completar etapa en DB ───────────────────────────────────────
-        cost_usd = _estimate_cost(chunks)
+        cost_usd = _calculate_cost(embed_tokens, llama_in_tokens, llama_out_tokens)
         db_client.completar_etapa(
             id_log=id_log,
             id_proceso=id_proceso,
@@ -181,7 +188,9 @@ def _process_record(
 
         logger.info(
             f"[doc={id_documento}] Vectorization complete — "
-            f"chunks={chunks_written}, cost=${cost_usd:.6f}"
+            f"chunks={chunks_written}, embed_tokens={embed_tokens}, "
+            f"llama_in={llama_in_tokens}, llama_out={llama_out_tokens}, "
+            f"cost=${cost_usd:.6f}"
         )
 
     except Exception as exc:
@@ -236,6 +245,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     try:
         with db_client:
+            # Load model costs once per container (no-op on warm start)
+            _load_model_costs(db_client)
+
             for record in records:
                 message_id = record.get("messageId", "unknown")
                 try:
