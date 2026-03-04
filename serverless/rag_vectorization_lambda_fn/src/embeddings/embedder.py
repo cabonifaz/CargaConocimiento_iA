@@ -3,7 +3,7 @@
 import json
 import logging
 import time
-from typing import List
+from typing import List, Tuple
 
 import boto3
 from botocore.config import Config
@@ -30,7 +30,7 @@ class BedrockCohereEmbedder:
         )
         self.client = boto3.client("bedrock-runtime", region_name=self.region, config=cfg)
 
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+    def embed_texts(self, texts: List[str]) -> Tuple[List[List[float]], int]:
         """
         Embed a list of texts, one Bedrock call per text.
 
@@ -38,25 +38,38 @@ class BedrockCohereEmbedder:
             texts: List of text strings to embed.
 
         Returns:
-            List of float vectors aligned with `texts`.
+            Tuple of (vectors, total_embed_tokens).
+            total_embed_tokens is the sum of billed input tokens across all calls
+            (read from the Bedrock HTTP response header).
         """
         if not texts:
             logger.warning("embed_texts called with empty list")
-            return []
+            return [], 0
 
         logger.info(f"Embedding {len(texts)} chunk(s) using {self.model_id}")
         vectors: List[List[float]] = []
+        total_tokens = 0
 
         for i, text in enumerate(texts):
-            vectors.append(self._embed_one(text))
+            vec, token_count = self._embed_one(text)
+            vectors.append(vec)
+            total_tokens += token_count
             if (i + 1) % 10 == 0:
                 logger.info(f"Embedded {i + 1}/{len(texts)} chunk(s)")
 
-        logger.info(f"Completed embedding {len(texts)} chunk(s)")
-        return vectors
+        logger.info(
+            f"Completed embedding {len(texts)} chunk(s), total_tokens={total_tokens}"
+        )
+        return vectors, total_tokens
 
-    def _embed_one(self, text: str) -> List[float]:
-        """Embed a single text with exponential backoff on throttling."""
+    def _embed_one(self, text: str) -> Tuple[List[float], int]:
+        """Embed a single text with exponential backoff on throttling.
+
+        Returns:
+            Tuple of (embedding_vector, token_count).
+            token_count is read from the Bedrock HTTP response header
+            (x-amzn-bedrock-input-token-count), with Cohere body meta as fallback.
+        """
         payload = json.dumps({"input_type": "search_document", "texts": [text]}).encode()
         backoff = 1.0
 
@@ -71,7 +84,16 @@ class BedrockCohereEmbedder:
                 if not isinstance(embeddings[0], list):
                     raise RuntimeError("Unexpected Bedrock response: embedding is not a list")
 
-                return embeddings[0]
+                # Authoritative source: Bedrock HTTP response header
+                http_headers = resp.get("ResponseMetadata", {}).get("HTTPHeaders", {})
+                raw = http_headers.get("x-amzn-bedrock-input-token-count")
+                token_count = int(raw) if raw is not None else 0
+                # Fallback: Cohere body meta.billed_units.input_tokens
+                if token_count == 0:
+                    meta = data.get("meta", {})
+                    token_count = meta.get("billed_units", {}).get("input_tokens", 0)
+
+                return embeddings[0], token_count
 
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
