@@ -177,6 +177,38 @@ class SQLServerClient:
             logger.error(f"Error in completar_etapa: {e}")
             raise
 
+    def get_model_costs(self) -> dict:
+        """
+        Query PARAMETROS for model costs (ID_MAESTRO=14, DESCRIPCION='COSTOS_MODELOS_X_MILLON_TKN').
+
+        Returns:
+            {id_modelo: (cost_input_per_million, cost_output_per_million)}
+            cost_output_per_million is 0.0 for models with no separate output pricing.
+        """
+        if not self.connection:
+            raise RuntimeError("Not connected to SQL Server")
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT NUM2, CAST(STRING1 AS FLOAT), CAST(STRING2 AS FLOAT) "
+                "FROM PARAMETROS "
+                "WHERE ID_MAESTRO = 14 "
+                "  AND DESCRIPCION = 'COSTOS_MODELOS_X_MILLON_TKN' "
+                "  AND ID_ESTADO_REGISTRO = 1"
+            )
+            rows = cursor.fetchall()
+            costs = {
+                int(row[0]): (float(row[1] or 0), float(row[2] or 0))
+                for row in rows
+            }
+            logger.info(f"Loaded model costs from DB: {costs}")
+            return costs
+
+        except Exception as e:
+            logger.error(f"Error in get_model_costs: {e}")
+            raise
+
     def fallar_etapa(
         self,
         id_log: int,

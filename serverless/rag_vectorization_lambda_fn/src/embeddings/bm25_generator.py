@@ -3,7 +3,7 @@
 import json
 import logging
 import math
-from typing import List
+from typing import List, Tuple
 
 import boto3
 from botocore.config import Config
