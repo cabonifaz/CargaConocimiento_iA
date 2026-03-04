@@ -46,7 +46,7 @@ class BedrockCohereEmbedder:
             logger.warning("embed_texts called with empty list")
             return [], 0
 
-        logger.info(f"Embedding {len(texts)} chunk(s) using {self.model_id}")
+        logger.info("Embedding %s chunk(s) using %s", len(texts), self.model_id)
         vectors: List[List[float]] = []
         total_tokens = 0
 
@@ -55,11 +55,9 @@ class BedrockCohereEmbedder:
             vectors.append(vec)
             total_tokens += token_count
             if (i + 1) % 10 == 0:
-                logger.info(f"Embedded {i + 1}/{len(texts)} chunk(s)")
+                logger.info("Embedded %s/%s chunk(s)", i + 1, len(texts))
 
-        logger.info(
-            f"Completed embedding {len(texts)} chunk(s), total_tokens={total_tokens}"
-        )
+        logger.info("Completed embedding %s chunk(s), total_tokens=%s", len(texts), total_tokens)
         return vectors, total_tokens
 
     def _embed_one(self, text: str) -> Tuple[List[float], int]:
@@ -98,14 +96,14 @@ class BedrockCohereEmbedder:
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
                 if code in {"ThrottlingException", "TooManyRequestsException"}:
-                    logger.warning(f"Bedrock throttled, retrying in {backoff}s")
+                    logger.warning("Bedrock throttled, retrying in %ss", backoff)
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 8.0)
                     continue
                 raise
 
             except BotoCoreError as e:
-                logger.warning(f"BotoCore error, retrying in {backoff}s: {e}")
+                logger.warning("BotoCore error, retrying in %ss: %s", backoff, e)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 8.0)
                 continue

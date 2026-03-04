@@ -58,7 +58,7 @@ class BedrockBM25Generator:
         if not chunks:
             return [], 0, 0
 
-        logger.info(f"Generating BM25 text for {len(chunks)} chunk(s) using {self.model_id}")
+        logger.info("Generating BM25 text for %s chunk(s) using %s", len(chunks), self.model_id)
 
         avg_chars = sum(len(c) for c in chunks) / len(chunks)
         tokens_per_chunk = avg_chars / self.CHARS_PER_TOKEN_ESTIMATE
@@ -76,8 +76,8 @@ class BedrockBM25Generator:
             total_input_tokens += in_tokens
             total_output_tokens += out_tokens
             logger.info(
-                f"BM25 batch {i // batch_size + 1}/{n_batches} done "
-                f"({len(batch)} chunk(s), in={in_tokens}, out={out_tokens})"
+                "BM25 batch %s/%s done (%s chunk(s), in=%s, out=%s)",
+                i // batch_size + 1, n_batches, len(batch), in_tokens, out_tokens,
             )
 
         # ── Guarantee: replace any empty result with the original chunk text ──
@@ -91,13 +91,14 @@ class BedrockBM25Generator:
         fallback_count = sum(1 for bm25, orig in zip(results, chunks) if bm25 == orig)
         if fallback_count:
             logger.warning(
-                f"{fallback_count}/{len(chunks)} chunk(s) fell back to original text "
-                "because BM25 generation returned empty"
+                "%s/%s chunk(s) fell back to original text because BM25 generation returned empty",
+                fallback_count, len(chunks),
             )
 
         logger.info(
-            f"BM25 generation complete for {len(chunks)} chunk(s) — "
-            f"total_input_tokens={total_input_tokens}, total_output_tokens={total_output_tokens}"
+            "BM25 generation complete for %s chunk(s) — "
+            "total_input_tokens=%s, total_output_tokens=%s",
+            len(chunks), total_input_tokens, total_output_tokens,
         )
         return results, total_input_tokens, total_output_tokens
 
@@ -156,7 +157,7 @@ class BedrockBM25Generator:
             return [str(k) for k in keywords_list[:len(chunks)]], input_tokens, output_tokens
 
         except (ClientError, Exception) as e:
-            logger.error(f"BM25 batch generation failed: {e}")
+            logger.error("BM25 batch generation failed: %s", e)
             # Return empty strings and zero tokens — caller applies non-empty guarantee;
             # zeros avoid inflating cost on error
             return [""] * len(chunks), 0, 0

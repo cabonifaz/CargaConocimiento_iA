@@ -36,13 +36,13 @@ class S3Client:
             ValueError: On unexpected JSON structure or empty result.
         """
         decoded_key = unquote(s3_key)
-        logger.info(f"Retrieving chunks from s3://{self.results_bucket}/{decoded_key}")
+        logger.info("Retrieving chunks from s3://%s/%s", self.results_bucket, decoded_key)
 
         try:
             response = self._client.get_object(Bucket=self.results_bucket, Key=decoded_key)
             content = response["Body"].read().decode("utf-8")
         except Exception as e:
-            logger.error(f"Failed to read s3://{self.results_bucket}/{decoded_key}: {e}")
+            logger.error("Failed to read s3://%s/%s: %s", self.results_bucket, decoded_key, e)
             raise
 
         try:
@@ -63,5 +63,5 @@ class S3Client:
         if not chunks:
             raise ValueError(f"No chunks found in s3://{self.results_bucket}/{decoded_key}")
 
-        logger.info(f"Retrieved {len(chunks)} chunk(s)")
+        logger.info("Retrieved %s chunk(s)", len(chunks))
         return chunks

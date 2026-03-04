@@ -127,13 +127,12 @@ def _process_record(
     ruta_segmentos: str = body["ruta_segmentos"]
 
     logger.info(
-        f"[doc={id_documento}] Starting vectorization — "
-        f"proceso={id_proceso}, file='{nombre_documento}'"
+        "[doc=%s] Starting vectorization — proceso=%s, file='%s'",
+        id_documento, id_proceso, nombre_documento,
     )
 
     # ── 2. Download chunks from S3 ─────────────────────────────────────────
     chunks = s3_client.get_chunks(ruta_segmentos)
-    logger.info(f"[doc={id_documento}] Retrieved {len(chunks)} chunk(s)")
 
     # ── 3. Iniciar etapa en DB ─────────────────────────────────────────────
     id_log: Optional[int] = None
@@ -187,15 +186,15 @@ def _process_record(
         )
 
         logger.info(
-            f"[doc={id_documento}] Vectorization complete — "
-            f"chunks={chunks_written}, embed_tokens={embed_tokens}, "
-            f"llama_in={llama_in_tokens}, llama_out={llama_out_tokens}, "
-            f"cost=${cost_usd:.6f}"
+            "[doc=%s] Vectorization complete — chunks=%s, embed_tokens=%s, "
+            "llama_in=%s, llama_out=%s, cost=$%.6f",
+            id_documento, chunks_written, embed_tokens,
+            llama_in_tokens, llama_out_tokens, cost_usd,
         )
 
     except Exception as exc:
         error_msg = str(exc)[:200]
-        logger.error(f"[doc={id_documento}] Vectorization failed: {error_msg}")
+        logger.error("[doc=%s] Vectorization failed: %s", id_documento, error_msg)
 
         if id_log is not None:
             try:
@@ -206,7 +205,7 @@ def _process_record(
                 )
             except Exception as db_exc:
                 logger.error(
-                    f"[doc={id_documento}] Also failed to call fallar_etapa: {db_exc}"
+                    "[doc=%s] Also failed to call fallar_etapa: %s", id_documento, db_exc
                 )
 
         raise  # re-raise → SQS partial batch failure → retry → DLQ
@@ -221,7 +220,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     Requires "Report batch item failures" enabled on the SQS event source mapping.
     """
     records: List[Dict[str, Any]] = event.get("Records", [])
-    logger.info(f"Received {len(records)} SQS record(s)")
+    logger.info("Received %s SQS record(s)", len(records))
 
     # Validate required environment variables early (fail fast on misconfiguration)
     required_env = [
@@ -256,15 +255,15 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         embedder, bm25_generator, weaviate_client,
                         embedding_model,
                     )
-                except Exception as e:
-                    logger.error(f"Record {message_id} failed: {e}")
+                except Exception:
                     failed_message_ids.append(message_id)
     finally:
         weaviate_client.close()
 
     if failed_message_ids:
         logger.warning(
-            f"{len(failed_message_ids)}/{len(records)} record(s) failed: {failed_message_ids}"
+            "%s/%s record(s) failed: %s",
+            len(failed_message_ids), len(records), failed_message_ids,
         )
 
     # Return partial batch failures — SQS retries only these records

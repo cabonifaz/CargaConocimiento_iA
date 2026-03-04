@@ -49,7 +49,7 @@ class WeaviateClient:
         try:
             self.client.close()
         except Exception as e:
-            logger.warning(f"Error closing Weaviate client: {e}")
+            logger.warning("Error closing Weaviate client: %s", e)
 
     def upsert_chunks(
         self,
@@ -97,8 +97,8 @@ class WeaviateClient:
         dim = len(vectors[0])
 
         logger.info(
-            f"Upserting {len(chunks)} chunk(s) to collection '{collection_name}' "
-            f"(doc_id={doc_id}, dim={dim})"
+            "Upserting %s chunk(s) to collection '%s' (doc_id=%s, dim=%s)",
+            len(chunks), collection_name, doc_id, dim,
         )
 
         self._ensure_collection_exists(collection_name)
@@ -150,7 +150,7 @@ class WeaviateClient:
                 coll.data.insert_many(objs)
                 total += len(objs)
             except WeaviateBaseError as e:
-                logger.warning(f"Batch insert failed, falling back to individual inserts: {e}")
+                logger.warning("Batch insert failed, falling back to individual inserts: %s", e)
                 for props, vec, uid in id_map:
                     try:
                         coll.data.insert(properties=props, uuid=uid, vector=vec)
@@ -158,17 +158,17 @@ class WeaviateClient:
                         coll.data.replace(uuid=uid, properties=props, vector=vec)
                     total += 1
 
-        logger.info(f"Upserted {total} chunk(s) to collection '{collection_name}'")
+        logger.info("Upserted %s chunk(s) to collection '%s'", total, collection_name)
         return total
 
     def _ensure_collection_exists(self, collection_name: str) -> None:
         """Create the collection if it does not already exist."""
         try:
             self.client.collections.get(collection_name)
-            logger.info(f"Collection '{collection_name}' already exists")
+            logger.info("Collection '%s' already exists", collection_name)
             return
         except Exception:
-            logger.info(f"Creating collection '{collection_name}'")
+            logger.info("Creating collection '%s'", collection_name)
 
         metric = self._metric_from_str(self.distance)
 
@@ -229,7 +229,7 @@ class WeaviateClient:
                 Property(name="id_status", data_type=DataType.INT, index_filterable=True),
             ],
         )
-        logger.info(f"Collection '{collection_name}' created successfully")
+        logger.info("Collection '%s' created successfully", collection_name)
 
     @staticmethod
     def _metric_from_str(s: str) -> VectorDistances:
