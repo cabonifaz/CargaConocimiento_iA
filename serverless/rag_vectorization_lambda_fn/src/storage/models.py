@@ -42,6 +42,10 @@ class WeaviateChunkMetadata:
     char_end: int
     ingested_at: str    # ISO-8601 timestamp
 
+    # ── Process traceability ───────────────────────────────────────────────
+    id_documento: int   # RAG_INGESTA_DOCUMENTOS.ID_DOCUMENTO
+    id_proceso: int     # RAG_INGESTA_PROCESOS.ID_PROCESO
+
     # ── Soft delete ────────────────────────────────────────────────────────
     id_status: int      # 1 = active, 0 = inactive (soft-deleted)
 
@@ -67,5 +71,7 @@ class WeaviateChunkMetadata:
             "char_start": self.char_start,
             "char_end": self.char_end,
             "ingested_at": self.ingested_at,
+            "id_documento": self.id_documento,
+            "id_proceso": self.id_proceso,
             "id_status": self.id_status,
         }

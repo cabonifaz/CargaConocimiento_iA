@@ -62,6 +62,8 @@ class WeaviateClient:
         doc_title: str,
         embedding_model: str,
         collection_name: str,
+        id_documento: int = 0,
+        id_proceso: int = 0,
     ) -> int:
         """
         Upsert chunks with their embedding vectors into a Weaviate collection.
@@ -76,6 +78,8 @@ class WeaviateClient:
             doc_title:        Document title (filename without extension).
             embedding_model:  Bedrock model ID used to generate vectors.
             collection_name:  Weaviate collection name (= company_id).
+            id_documento:     RAG_INGESTA_DOCUMENTOS.ID_DOCUMENTO (for traceability).
+            id_proceso:       RAG_INGESTA_PROCESOS.ID_PROCESO (for traceability).
 
         Returns:
             Number of chunks written.
@@ -132,6 +136,8 @@ class WeaviateClient:
                     char_start=chunk["char_start"],
                     char_end=chunk["char_end"],
                     ingested_at=now,
+                    id_documento=id_documento,
+                    id_proceso=id_proceso,
                     id_status=1,
                 )
 
@@ -216,6 +222,9 @@ class WeaviateClient:
                 Property(name="char_end", data_type=DataType.INT, index_filterable=False),
                 Property(name="ingested_at", data_type=DataType.TEXT,
                          index_searchable=False, index_filterable=False),
+                # ── Process traceability ───────────────────────────────────
+                Property(name="id_documento", data_type=DataType.INT, index_filterable=True),
+                Property(name="id_proceso", data_type=DataType.INT, index_filterable=True),
                 # ── Soft delete ────────────────────────────────────────────
                 Property(name="id_status", data_type=DataType.INT, index_filterable=True),
             ],
