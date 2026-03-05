@@ -157,7 +157,9 @@ def _process_record(
             )
 
         # ── 6. Weaviate upsert ─────────────────────────────────────────────
-        collection_name = str(id_empresa)
+        company_id = f"EMPR{id_empresa}"
+        area_id = f"AREA{id_area}"
+        collection_name = company_id
         doc_id = f"CONOC-{id_documento}"
         doc_title = os.path.splitext(nombre_documento)[0]
 
@@ -166,8 +168,8 @@ def _process_record(
             vectors=vectors,
             bm25_texts=bm25_texts,
             doc_id=doc_id,
-            company_id=str(id_empresa),
-            area_id=str(id_area),
+            company_id=company_id,
+            area_id=area_id,
             doc_title=doc_title,
             embedding_model=embedding_model,
             collection_name=collection_name,
