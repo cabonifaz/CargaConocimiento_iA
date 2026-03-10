@@ -46,9 +46,6 @@ class WeaviateChunkMetadata:
     id_documento: int   # RAG_INGESTA_DOCUMENTOS.ID_DOCUMENTO
     id_proceso: int     # RAG_INGESTA_PROCESOS.ID_PROCESO
 
-    # ── Soft delete ────────────────────────────────────────────────────────
-    id_status: int      # 1 = active, 0 = inactive (soft-deleted)
-
     def to_weaviate_properties(self) -> dict:
         """Return a plain dict for use in Weaviate DataObject.properties."""
         return {
@@ -73,5 +70,4 @@ class WeaviateChunkMetadata:
             "ingested_at": self.ingested_at,
             "id_documento": self.id_documento,
             "id_proceso": self.id_proceso,
-            "id_status": self.id_status,
         }

@@ -138,7 +138,6 @@ class WeaviateClient:
                     ingested_at=now,
                     id_documento=id_documento,
                     id_proceso=id_proceso,
-                    id_status=1,
                 )
 
                 props = metadata.to_weaviate_properties()
