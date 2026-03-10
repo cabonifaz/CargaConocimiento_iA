@@ -1,6 +1,7 @@
 """SQL Server client for RAG ingestion stored procedures."""
 
 import logging
+from typing import Optional
 
 try:
     import pymssql
@@ -140,6 +141,7 @@ class SQLServerClient:
         estado_siguiente: int,
         ruta_resultado: str,
         costo_usd: float,
+        cant_chunks: Optional[int] = None,
         usumod: str = WORKER_NAME,
     ) -> None:
         """
@@ -154,6 +156,7 @@ class SQLServerClient:
             estado_siguiente: Next queue state — 5 (En cola vectorización)
             ruta_resultado: S3 key of the result JSON file
             costo_usd: Cost of this stage in USD (0.0 for local chunking)
+            cant_chunks: Number of chunks produced (segmentation stage only)
             usumod: Worker identifier
         """
         if not self.connection:
@@ -163,14 +166,14 @@ class SQLServerClient:
             logger.info(
                 f"SP_RAG_INGESTA_COMPLETAR_ETAPA id_log={id_log}, "
                 f"id_proceso={id_proceso}, estado_siguiente={estado_siguiente}, "
-                f"costo_usd={costo_usd:.6f}"
+                f"costo_usd={costo_usd:.6f}, cant_chunks={cant_chunks}"
             )
             cursor = self.connection.cursor(as_dict=True)
             cursor.execute(
                 "EXEC SP_RAG_INGESTA_COMPLETAR_ETAPA "
                 "@ID_LOG=%d, @ID_PROCESO=%d, @ESTADO_SIGUIENTE=%d, "
-                "@RUTA_RESULTADO=%s, @COSTO_USD=%s, @USUMOD=%s",
-                (id_log, id_proceso, estado_siguiente, ruta_resultado, f"{costo_usd:.6f}", usumod),
+                "@RUTA_RESULTADO=%s, @COSTO_USD=%s, @CANT_CHUNKS=%s, @USUMOD=%s",
+                (id_log, id_proceso, estado_siguiente, ruta_resultado, f"{costo_usd:.6f}", cant_chunks, usumod),
             )
             self.connection.commit()
             logger.info(f"Etapa completada — proceso {id_proceso} → estado {estado_siguiente}")

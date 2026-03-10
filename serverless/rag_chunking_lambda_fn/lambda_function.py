@@ -128,6 +128,7 @@ def _process_record(
             estado_siguiente=ESTADO_EN_COLA_VEC,
             ruta_resultado=result_key,
             costo_usd=0.0,
+            cant_chunks=len(chunks),
         )
 
         # ── 7. Enqueue next stage (embedding) ─────────────────────────────
