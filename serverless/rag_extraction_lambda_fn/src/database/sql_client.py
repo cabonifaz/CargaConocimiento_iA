@@ -179,6 +179,34 @@ class SQLServerClient:
             logger.error(f"Error in completar_etapa: {e}")
             raise
 
+    def get_ocr_cost_per_1000_pages(self) -> float:
+        """
+        Fetch the Mistral OCR cost per 1000 pages from PARAMETROS.
+
+        Reads NUM2 from the row where ID_MAESTRO=15 AND NUM1=1 (COSTOS_OCR_X_MIL_PAGINAS).
+
+        Returns:
+            Cost in USD per 1000 pages.
+
+        Raises:
+            RuntimeError: If the parameter row is not found.
+        """
+        if not self.connection:
+            raise RuntimeError("Not connected to SQL Server")
+
+        cursor = self.connection.cursor(as_dict=True)
+        cursor.execute(
+            "SELECT NUM2 FROM PARAMETROS WHERE ID_MAESTRO = %d AND NUM1 = %d AND ID_ESTADO_REGISTRO = 1",
+            (15, 1),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("OCR cost parameter not found in PARAMETROS (ID_MAESTRO=15, NUM1=1)")
+
+        cost = float(row["NUM2"])
+        logger.info(f"OCR cost loaded from PARAMETROS: ${cost:.4f} per 1000 pages")
+        return cost
+
     def fallar_etapa(
         self,
         id_log: int,

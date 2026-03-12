@@ -34,7 +34,6 @@ from typing import Any, Dict, List, Optional
 from src.database import SQLServerClient
 from src.storage import S3Client
 from src.ocr import MistralOCRClient
-from src.ocr.mistral_client import MistralOCRClient as _OCR  # re-use cost helper
 from src.queue import SQSPublisher
 
 logger = logging.getLogger()
@@ -80,6 +79,7 @@ def _process_record(
     s3_client: S3Client,
     ocr_client: MistralOCRClient,
     sqs_publisher: SQSPublisher,
+    ocr_cost_per_1000_pages: float,
 ) -> None:
     """
     Process a single SQS record (one document).
@@ -126,7 +126,7 @@ def _process_record(
         s3_client.upload_markdown(result_key, full_markdown)
 
         # ── 7. Calculate cost ──────────────────────────────────────────────
-        cost_usd = _OCR.calculate_cost(total_pages)
+        cost_usd = MistralOCRClient.calculate_cost(total_pages, ocr_cost_per_1000_pages)
 
         # ── 8. Completar etapa en DB ───────────────────────────────────────
         db_client.completar_etapa(
@@ -199,10 +199,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     failed_message_ids: List[str] = []
 
     with db_client:
+        ocr_cost_per_1000_pages = db_client.get_ocr_cost_per_1000_pages()
+
         for record in records:
             message_id = record.get("messageId", "unknown")
             try:
-                _process_record(record, db_client, s3_client, ocr_client, sqs_publisher)
+                _process_record(record, db_client, s3_client, ocr_client, sqs_publisher, ocr_cost_per_1000_pages)
             except Exception as e:
                 logger.error(f"Record {message_id} failed: {e}")
                 failed_message_ids.append(message_id)

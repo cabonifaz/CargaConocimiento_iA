@@ -7,10 +7,6 @@ from mistralai import Mistral
 
 logger = logging.getLogger()
 
-# Mistral OCR pricing: $1 per 1,000 pages = $0.001 per page
-COST_PER_PAGE_USD = 0.001
-
-
 class MistralOCRClient:
     """
     Wrapper around the Mistral OCR API.
@@ -64,6 +60,6 @@ class MistralOCRClient:
         return markdowns, total_pages
 
     @staticmethod
-    def calculate_cost(total_pages: int) -> float:
+    def calculate_cost(total_pages: int, cost_per_1000_pages: float) -> float:
         """Return the USD cost for processing `total_pages` pages."""
-        return total_pages * COST_PER_PAGE_USD
+        return (total_pages * cost_per_1000_pages) / 1000
