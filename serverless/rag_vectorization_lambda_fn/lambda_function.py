@@ -32,6 +32,10 @@ ESTADO_CARGADO = 7            # ID_MAESTRO=7,  NUM1=7  (Cargado — terminal suc
 _ID_MODELO_COHERE = 4   # Cohere Embed Multilingual v3
 _ID_MODELO_LLAMA = 8    # Llama 4 Maverick 17B
 
+# Public constants used when calling completar_etapa with per-model logs
+MODELO_COHERE = _ID_MODELO_COHERE
+MODELO_LLAMA = _ID_MODELO_LLAMA
+
 # Model costs fetched from DB once at cold start — populated in lambda_handler
 # {id_modelo: (cost_input_per_million_tokens, cost_output_per_million_tokens)}
 _model_costs: dict = {}
@@ -54,21 +58,25 @@ def _calculate_cost(
     embed_tokens: int,
     llama_input_tokens: int,
     llama_output_tokens: int,
-) -> float:
+) -> tuple:
     """
-    Compute total Bedrock cost using rates from PARAMETROS.
+    Compute per-model Bedrock costs using rates from PARAMETROS.
 
     Rates are stored as cost per million tokens (STRING1/STRING2 columns).
-    Returns 0.0 if cost data is unavailable (conservative — never over-reports).
+    Returns (0.0, 0.0) if cost data is unavailable (conservative — never over-reports).
+
+    Returns:
+        (embed_cost, llama_cost) as a tuple of floats.
     """
     cohere_in_per_m, _ = _model_costs.get(_ID_MODELO_COHERE, (0.0, 0.0))
     llama_in_per_m, llama_out_per_m = _model_costs.get(_ID_MODELO_LLAMA, (0.0, 0.0))
 
-    return (
-        embed_tokens       * (cohere_in_per_m  / 1_000_000)
-        + llama_input_tokens  * (llama_in_per_m   / 1_000_000)
-        + llama_output_tokens * (llama_out_per_m   / 1_000_000)
+    embed_cost = embed_tokens * (cohere_in_per_m / 1_000_000)
+    llama_cost = (
+        llama_input_tokens  * (llama_in_per_m  / 1_000_000)
+        + llama_output_tokens * (llama_out_per_m / 1_000_000)
     )
+    return embed_cost, llama_cost
 
 
 def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str) -> tuple:
@@ -178,20 +186,39 @@ def _process_record(
         )
 
         # ── 7. Completar etapa en DB ───────────────────────────────────────
-        cost_usd = _calculate_cost(embed_tokens, llama_in_tokens, llama_out_tokens)
+        embed_cost, llama_cost = _calculate_cost(embed_tokens, llama_in_tokens, llama_out_tokens)
+
+        # Log 1 — Cohere embedding (uses the id_log from iniciar_etapa)
         db_client.completar_etapa(
             id_log=id_log,
             id_proceso=id_proceso,
+            estado_siguiente=ESTADO_CARGADO,   # passed but ignored (avanzar_estado=False)
+            ruta_resultado=None,
+            costo_usd=embed_cost,
+            input_tokens=embed_tokens,
+            id_modelo=MODELO_COHERE,
+            avanzar_estado=False,
+        )
+
+        # Log 2 — Llama BM25 (new row, advances process state to Cargado)
+        id_log_llama = db_client.crear_log(id_proceso, ETAPA_VECTORIZACION)
+        db_client.completar_etapa(
+            id_log=id_log_llama,
+            id_proceso=id_proceso,
             estado_siguiente=ESTADO_CARGADO,
-            ruta_resultado=None,   # vectors live in Weaviate, no S3 output
-            costo_usd=cost_usd,
+            ruta_resultado=None,
+            costo_usd=llama_cost,
+            input_tokens=llama_in_tokens,
+            output_tokens=llama_out_tokens,
+            id_modelo=MODELO_LLAMA,
+            avanzar_estado=True,
         )
 
         logger.info(
             "[doc=%s] Vectorization complete — chunks=%s, embed_tokens=%s, "
-            "llama_in=%s, llama_out=%s, cost=$%.6f",
+            "llama_in=%s, llama_out=%s, embed_cost=$%.6f, llama_cost=$%.6f",
             id_documento, chunks_written, embed_tokens,
-            llama_in_tokens, llama_out_tokens, cost_usd,
+            llama_in_tokens, llama_out_tokens, embed_cost, llama_cost,
         )
 
     except Exception as exc:

@@ -1,6 +1,7 @@
 """SQL Server client for RAG ingestion stored procedures."""
 
 import logging
+from typing import Optional
 
 try:
     import pymssql
@@ -129,39 +130,95 @@ class SQLServerClient:
         ruta_resultado: str,
         costo_usd: float,
         usumod: str = WORKER_NAME,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        id_modelo: Optional[int] = None,
+        avanzar_estado: bool = True,
     ) -> None:
         """
         Execute SP_RAG_INGESTA_COMPLETAR_ETAPA.
 
-        Marks the log entry as successful and advances the process to
-        `estado_siguiente`. For vectorization, ruta_resultado is None
-        (vectors live in Weaviate, not S3).
+        Marks the log entry as successful. When avanzar_estado=True (default)
+        also advances the process to `estado_siguiente`.
 
         Args:
-            id_log: Log entry ID (from iniciar_etapa)
+            id_log: Log entry ID (from iniciar_etapa or crear_log)
             id_proceso: Process ID
             estado_siguiente: 7 = Cargado (terminal success)
-            ruta_resultado: None for this stage
+            ruta_resultado: None for vectorization stage
             costo_usd: Bedrock cost (from actual token counts × DB rates)
             usumod: Worker identifier
+            input_tokens: Input token count for this model call
+            output_tokens: Output token count for this model call (None for embedding)
+            id_modelo: Model ID (maps to PARAMETROS ID_MAESTRO=14)
+            avanzar_estado: False = update log only, do NOT advance process state
         """
         if not self.connection:
             raise RuntimeError("Not connected to SQL Server")
 
         logger.info(
             "SP_RAG_INGESTA_COMPLETAR_ETAPA id_log=%s, id_proceso=%s, "
-            "estado_siguiente=%s, costo_usd=%.6f",
-            id_log, id_proceso, estado_siguiente, costo_usd,
+            "estado_siguiente=%s, costo_usd=%.6f, avanzar=%s",
+            id_log, id_proceso, estado_siguiente, costo_usd, avanzar_estado,
         )
         cursor = self.connection.cursor(as_dict=True)
         cursor.execute(
             "EXEC SP_RAG_INGESTA_COMPLETAR_ETAPA "
             "@ID_LOG=%d, @ID_PROCESO=%d, @ESTADO_SIGUIENTE=%d, "
-            "@RUTA_RESULTADO=%s, @COSTO_USD=%s, @USUMOD=%s",
-            (id_log, id_proceso, estado_siguiente, ruta_resultado, f"{costo_usd:.6f}", usumod),
+            "@RUTA_RESULTADO=%s, @COSTO_USD=%s, @USUMOD=%s, "
+            "@INPUT_TOKENS=%s, @OUTPUT_TOKENS=%s, @ID_MODELO=%s, @AVANZAR_ESTADO=%d",
+            (
+                id_log, id_proceso, estado_siguiente,
+                ruta_resultado, f"{costo_usd:.6f}", usumod,
+                input_tokens, output_tokens, id_modelo,
+                1 if avanzar_estado else 0,
+            ),
         )
         self.connection.commit()
-        logger.info("Etapa completada — proceso %s → estado %s", id_proceso, estado_siguiente)
+        logger.info("Etapa completada — proceso %s → estado %s (avanzar=%s)", id_proceso, estado_siguiente, avanzar_estado)
+
+    def crear_log(
+        self,
+        id_proceso: int,
+        id_etapa: int,
+        usucre: str = WORKER_NAME,
+    ) -> int:
+        """
+        Execute SP_RAG_INGESTA_CREAR_LOG.
+
+        Inserts a new log row for an additional sub-log within the same etapa
+        (e.g. second model in the vectorization stage) without touching process state.
+
+        Args:
+            id_proceso: Process ID
+            id_etapa: Stage type — 3 = Vectorización
+            usucre: Worker identifier
+
+        Returns:
+            ID_LOG of the newly created log entry.
+        """
+        if not self.connection:
+            raise RuntimeError("Not connected to SQL Server")
+
+        logger.info(
+            "SP_RAG_INGESTA_CREAR_LOG id_proceso=%s, id_etapa=%s",
+            id_proceso, id_etapa,
+        )
+        cursor = self.connection.cursor(as_dict=True)
+        cursor.execute(
+            "EXEC SP_RAG_INGESTA_CREAR_LOG @ID_PROCESO=%d, @ID_ETAPA=%d, @USUCRE=%s",
+            (id_proceso, id_etapa, usucre),
+        )
+
+        # First result set: ID_LOG
+        log_row = cursor.fetchone()
+        if not log_row or "ID_LOG" not in log_row:
+            raise RuntimeError("SP_RAG_INGESTA_CREAR_LOG did not return ID_LOG")
+
+        self.connection.commit()
+        id_log = int(log_row["ID_LOG"])
+        logger.info("Log adicional creado — ID_LOG=%s", id_log)
+        return id_log
 
     def get_model_costs(self) -> dict:
         """
