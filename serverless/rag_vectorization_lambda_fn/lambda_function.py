@@ -108,9 +108,9 @@ def _calculate_cost(
     return embed_cost, llama_cost
 
 
-def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str) -> tuple:
-    """Instantiate all clients from environment variables."""
-    db_client = SQLServerClient(
+def _build_db_client() -> SQLServerClient:
+    """Instantiate only the DB client. Called first so errors can always be reported."""
+    return SQLServerClient(
         server=os.environ["DB_SERVER"],
         database=os.environ["DB_NAME"],
         user=os.environ["DB_USER"],
@@ -118,6 +118,9 @@ def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str
         port=int(os.environ.get("DB_PORT", "1433")),
     )
 
+
+def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str) -> tuple:
+    """Instantiate S3, Bedrock, and Weaviate clients from environment variables."""
     s3_client = S3Client(
         results_bucket=os.environ["S3_RESULTS_BUCKET"],
     )
@@ -137,7 +140,7 @@ def _build_clients(bedrock_region: str, embedding_model: str, bm25_model_id: str
         api_key=os.environ["WEAVIATE_API_KEY"],
     )
 
-    return db_client, s3_client, embedder, bm25_generator, weaviate_client
+    return s3_client, embedder, bm25_generator, weaviate_client
 
 
 def _process_record(
@@ -293,11 +296,51 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     embedding_model = os.environ.get("BEDROCK_MODEL_ID", "cohere.embed-multilingual-v3")
     bm25_model_id = os.environ.get("BM25_MODEL_ID", "us.meta.llama4-maverick-17b-instruct-v1:0")
 
-    db_client, s3_client, embedder, bm25_generator, weaviate_client = _build_clients(
-        bedrock_region, embedding_model, bm25_model_id
-    )
+    # DB client is created first — always available for error reporting.
+    db_client = _build_db_client()
 
     failed_message_ids: List[str] = []
+
+    # Build the remaining clients (S3, Bedrock, Weaviate). Weaviate connects
+    # eagerly, so a bad URL/key raises here — before any record is processed.
+    weaviate_client = None
+    try:
+        s3_client, embedder, bm25_generator, weaviate_client = _build_clients(
+            bedrock_region, embedding_model, bm25_model_id
+        )
+    except Exception as build_exc:
+        tech_msg = str(build_exc)
+        friendly_msg = _friendly_error(build_exc)
+        logger.error("Failed to initialise clients: %s", tech_msg)
+
+        # Mark every record as failed so the frontend shows the error.
+        with db_client:
+            for record in records:
+                message_id = record.get("messageId", "unknown")
+                try:
+                    body = json.loads(record["body"])
+                    id_log = db_client.iniciar_etapa(
+                        id_proceso=body["id_proceso"],
+                        id_etapa=ETAPA_VECTORIZACION,
+                        estado_procesando=ESTADO_VECTORIZANDO,
+                    )
+                    db_client.fallar_etapa(
+                        id_log=id_log,
+                        id_proceso=body["id_proceso"],
+                        mensaje_error=friendly_msg,
+                    )
+                except Exception as db_exc:
+                    logger.error(
+                        "Failed to report init error to DB for record %s: %s",
+                        message_id, db_exc,
+                    )
+                failed_message_ids.append(message_id)
+
+        return {
+            "batchItemFailures": [
+                {"itemIdentifier": mid} for mid in failed_message_ids
+            ]
+        }
 
     try:
         with db_client:
