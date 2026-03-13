@@ -14,7 +14,9 @@ Environment variables:
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from botocore.exceptions import BotoCoreError, ClientError
 
 from src.database import SQLServerClient
 from src.embeddings import BedrockBM25Generator, BedrockCohereEmbedder
@@ -39,6 +41,33 @@ MODELO_LLAMA = _ID_MODELO_LLAMA
 # Model costs fetched from DB once at cold start — populated in lambda_handler
 # {id_modelo: (cost_input_per_million_tokens, cost_output_per_million_tokens)}
 _model_costs: dict = {}
+
+
+def _friendly_error(exc: Exception) -> str:
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return "Los segmentos del documento no fueron encontrados en el almacenamiento"
+        if code == "AccessDenied":
+            return "Sin permisos para acceder a los segmentos en el almacenamiento"
+        if code in ("ThrottlingException", "TooManyRequestsException"):
+            return "El servicio de vectorización rechazó la solicitud por límite de uso"
+        return "Error de comunicación con los servicios de AWS"
+    if isinstance(exc, BotoCoreError):
+        return "Error de conexión con los servicios de AWS"
+    if exc.__class__.__module__.startswith("weaviate"):
+        return "Error al almacenar los vectores en la base de datos vectorial"
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if "mismatch" in msg:
+            return "Error al generar los vectores semánticos del documento"
+        if "Unexpected Bedrock response" in msg:
+            return "El servicio de vectorización devolvió una respuesta inesperada"
+        if "Not connected" in msg:
+            return "Error de conexión a la base de datos"
+    if isinstance(exc, ValueError):
+        return "Error de consistencia al preparar los datos para vectorización"
+    return "Error al vectorizar el documento"
 
 
 def _load_model_costs(db_client: SQLServerClient) -> None:
@@ -139,11 +168,7 @@ def _process_record(
         id_documento, id_proceso, nombre_documento,
     )
 
-    # ── 2. Download chunks from S3 ─────────────────────────────────────────
-    chunks = s3_client.get_chunks(ruta_segmentos)
-
-    # ── 3. Iniciar etapa en DB ─────────────────────────────────────────────
-    id_log: Optional[int] = None
+    # ── 2. Iniciar etapa en DB ─────────────────────────────────────────────
     id_log = db_client.iniciar_etapa(
         id_proceso=id_proceso,
         id_etapa=ETAPA_VECTORIZACION,
@@ -151,6 +176,9 @@ def _process_record(
     )
 
     try:
+        # ── 3. Download chunks from S3 ─────────────────────────────────────
+        chunks = s3_client.get_chunks(ruta_segmentos)
+
         texts = [c["text"] for c in chunks]
 
         # ── 4. BM25 keyword generation ─────────────────────────────────────
@@ -222,20 +250,20 @@ def _process_record(
         )
 
     except Exception as exc:
-        error_msg = str(exc)[:200]
-        logger.error("[doc=%s] Vectorization failed: %s", id_documento, error_msg)
+        tech_msg = str(exc)
+        friendly_msg = _friendly_error(exc)
+        logger.error("[doc=%s] Vectorization failed: %s", id_documento, tech_msg)
 
-        if id_log is not None:
-            try:
-                db_client.fallar_etapa(
-                    id_log=id_log,
-                    id_proceso=id_proceso,
-                    mensaje_error=error_msg,
-                )
-            except Exception as db_exc:
-                logger.error(
-                    "[doc=%s] Also failed to call fallar_etapa: %s", id_documento, db_exc
-                )
+        try:
+            db_client.fallar_etapa(
+                id_log=id_log,
+                id_proceso=id_proceso,
+                mensaje_error=friendly_msg,
+            )
+        except Exception as db_exc:
+            logger.error(
+                "[doc=%s] Also failed to call fallar_etapa: %s", id_documento, db_exc
+            )
 
         raise  # re-raise → SQS partial batch failure → retry → DLQ
 

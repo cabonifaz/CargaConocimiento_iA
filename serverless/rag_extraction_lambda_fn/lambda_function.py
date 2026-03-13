@@ -31,6 +31,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from botocore.exceptions import BotoCoreError, ClientError, EndpointConnectionError
+
 from src.database import SQLServerClient
 from src.storage import S3Client
 from src.ocr import MistralOCRClient
@@ -45,6 +47,29 @@ ESTADO_EXTRAYENDO = 2         # ID_MAESTRO=7,  NUM1=2  (Extrayendo texto)
 ESTADO_EN_COLA_SEG = 3        # ID_MAESTRO=7,  NUM1=3  (En cola segmentación)
 
 PAGE_SEPARATOR = "\n\n---\n\n"
+
+
+def _friendly_error(exc: Exception) -> str:
+    if isinstance(exc, EndpointConnectionError):
+        return "No se pudo conectar con el servicio OCR"
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return "El archivo PDF no fue encontrado en el almacenamiento"
+        if code == "AccessDenied":
+            return "Sin permisos para acceder al archivo en el almacenamiento"
+        return "Error de comunicación con los servicios de almacenamiento"
+    if isinstance(exc, BotoCoreError):
+        return "Error de conexión con los servicios de AWS"
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if "empty pages" in msg:
+            return "El documento no contiene páginas de texto reconocible"
+        if "Not connected" in msg:
+            return "Error de conexión a la base de datos"
+    if isinstance(exc, ValueError):
+        return "El documento tiene un formato inválido"
+    return "Error al extraer el texto del documento"
 
 
 def _build_clients() -> tuple:
@@ -154,8 +179,9 @@ def _process_record(
         )
 
     except Exception as exc:
-        error_msg = str(exc)[:200]
-        logger.error(f"[doc={id_documento}] Extraction failed: {error_msg}")
+        tech_msg = str(exc)
+        friendly_msg = _friendly_error(exc)
+        logger.error(f"[doc={id_documento}] Extraction failed: {tech_msg}")
 
         # Mark process as Error in DB (best-effort — don't mask original exception)
         if id_log is not None:
@@ -163,7 +189,7 @@ def _process_record(
                 db_client.fallar_etapa(
                     id_log=id_log,
                     id_proceso=id_proceso,
-                    mensaje_error=error_msg,
+                    mensaje_error=friendly_msg,
                 )
             except Exception as db_exc:
                 logger.error(

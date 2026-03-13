@@ -7,8 +7,8 @@ Runtime:      Python 3.11
 Flow per SQS record:
   1. Parse message → id_documento, id_proceso, id_empresa, id_area,
                      nombre_documento, ruta_markdown, id_modelo_embedding
-  2. Download .md file from S3 (S3_RESULTS_BUCKET / ruta_markdown)
-  3. SP_RAG_INGESTA_INICIAR_ETAPA  → state=4 (Segmentando), obtain ID_LOG
+  2. SP_RAG_INGESTA_INICIAR_ETAPA  → state=4 (Segmentando), obtain ID_LOG
+  3. Download .md file from S3 (S3_RESULTS_BUCKET / ruta_markdown)
   4. Split .md on PAGE_SEPARATOR → pages list
      chunk_markdown(pages) → list of chunk dicts with page/section metadata
   5. Upload JSON array of chunks to S3:
@@ -16,7 +16,7 @@ Flow per SQS record:
   6. SP_RAG_INGESTA_COMPLETAR_ETAPA → state=5 (En cola vectorización),
      record result key, cost=0.0 (local computation)
   7. Publish message to embedding SQS queue → triggers Stage 3
-  On error (after step 3):
+  On error (after step 2):
      SP_RAG_INGESTA_FALLAR_ETAPA → state=8 (Error)
      re-raise → SQS partial batch failure → DLQ after maxReceiveCount
 
@@ -29,7 +29,9 @@ Environment variables:
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from botocore.exceptions import BotoCoreError, ClientError
 
 from src.database import SQLServerClient
 from src.storage import S3Client
@@ -46,6 +48,29 @@ ESTADO_EN_COLA_VEC = 5        # ID_MAESTRO=7,  NUM1=5  (En cola vectorización)
 
 # Separator written between pages by the extraction Lambda
 PAGE_SEPARATOR = "\n\n---\n\n"
+
+
+def _friendly_error(exc: Exception) -> str:
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return "El archivo de texto no fue encontrado en el almacenamiento"
+        if code == "AccessDenied":
+            return "Sin permisos para acceder al archivo en el almacenamiento"
+        return "Error de comunicación con los servicios de almacenamiento"
+    if isinstance(exc, BotoCoreError):
+        return "Error de conexión con los servicios de AWS"
+    if isinstance(exc, ValueError):
+        msg = str(exc)
+        if "empty" in msg or "nothing to chunk" in msg:
+            return "El documento no contiene texto para segmentar"
+        if "Invalid JSON" in msg or "Unexpected JSON" in msg:
+            return "El archivo de texto tiene un formato inválido"
+        return "El documento tiene un formato inválido"
+    if isinstance(exc, RuntimeError):
+        if "Not connected" in str(exc):
+            return "Error de conexión a la base de datos"
+    return "Error al segmentar el documento"
 
 
 def _build_clients() -> tuple:
@@ -95,11 +120,7 @@ def _process_record(
         f"proceso={id_proceso}, file='{nombre_documento}'"
     )
 
-    # ── 2. Download .md from S3 ────────────────────────────────────────────
-    markdown_text = s3_client.download_markdown(ruta_markdown)
-
-    # ── 3. Iniciar etapa en DB ─────────────────────────────────────────────
-    id_log: Optional[int] = None
+    # ── 2. Iniciar etapa en DB ─────────────────────────────────────────────
     id_log = db_client.iniciar_etapa(
         id_proceso=id_proceso,
         id_etapa=ETAPA_SEGMENTACION,
@@ -107,6 +128,9 @@ def _process_record(
     )
 
     try:
+        # ── 3. Download .md from S3 ────────────────────────────────────────
+        markdown_text = s3_client.download_markdown(ruta_markdown)
+
         # ── 4. Split pages and chunk ───────────────────────────────────────
         pages = markdown_text.split(PAGE_SEPARATOR)
         logger.info(f"[doc={id_documento}] Split into {len(pages)} page(s)")
@@ -148,21 +172,21 @@ def _process_record(
         )
 
     except Exception as exc:
-        error_msg = str(exc)[:200]
-        logger.error(f"[doc={id_documento}] Chunking failed: {error_msg}")
+        tech_msg = str(exc)
+        friendly_msg = _friendly_error(exc)
+        logger.error(f"[doc={id_documento}] Chunking failed: {tech_msg}")
 
         # Mark process as Error in DB (best-effort — don't mask original exception)
-        if id_log is not None:
-            try:
-                db_client.fallar_etapa(
-                    id_log=id_log,
-                    id_proceso=id_proceso,
-                    mensaje_error=error_msg,
-                )
-            except Exception as db_exc:
-                logger.error(
-                    f"[doc={id_documento}] Also failed to call fallar_etapa: {db_exc}"
-                )
+        try:
+            db_client.fallar_etapa(
+                id_log=id_log,
+                id_proceso=id_proceso,
+                mensaje_error=friendly_msg,
+            )
+        except Exception as db_exc:
+            logger.error(
+                f"[doc={id_documento}] Also failed to call fallar_etapa: {db_exc}"
+            )
 
         raise  # re-raise → SQS partial batch failure → retry → DLQ
 
